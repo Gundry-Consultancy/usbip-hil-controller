@@ -192,16 +192,23 @@ have a Host row — it's the orchestrator, not a worker.
 
 | Field             | Notes                                                       |
 |-------------------|-------------------------------------------------------------|
-| `id`              | Stable slug, e.g. `rpi-displays`, `rpi-hil003`.             |
-| `role`            | `microcontroller-fleet` / `sbc-fleet` / `protomq-broker`.   |
-| `addr`            | Hostname or IP.                                             |
-| `transport`       | `ssh` (v1 default) or `agent` (see §15 OQ11).               |
-| `ssh_user`        | Default `pi`.                                               |
-| `ssh_key_path`    | Path on the controller filesystem to the per-host key.      |
-| `capabilities`    | Tags the resolver can require, e.g. `power-control`,        |
-|                   | `usbip-server`, `mcp23017`, `cameras`.                      |
-| `status`          | `available` / `quarantined` / `offline`.                    |
-| `last_seen_at`    | Updated by periodic health probe.                           |
+| `id`                    | Stable slug, e.g. `rpi-displays`, `rpi-hil003`.       |
+| `role`                  | `microcontroller-fleet` / `sbc-fleet` / `protomq-broker`. |
+| `addr`                  | Hostname or IP.                                       |
+| `transport`             | `ssh` (v1 default) or `agent` (see §15 OQ11).         |
+| `ssh_user`              | Default `pi`.                                         |
+| `ssh_key_path`          | Path on the controller filesystem to the per-host key. |
+| `capabilities`          | Tags the resolver can require, e.g. `power-control`,  |
+|                         | `usbip-server`, `mcp23017`, `cameras`.                |
+| `max_concurrent_jobs`   | Hard cap on simultaneous jobs on this host. Default: |
+|                         | `1` for `sbc-fleet` (one SBC HIL host runs one test  |
+|                         | or suite at a time — the bench can't usefully share   |
+|                         | a Pi between two CI jobs), unbounded (`null`) for     |
+|                         | `microcontroller-fleet` (per-device locks are the     |
+|                         | real constraint there). See §9 for how exclusive-host |
+|                         | jobs interact with this. |
+| `status`                | `available` / `quarantined` / `offline`.              |
+| `last_seen_at`          | Updated by periodic health probe.                     |
 
 Host rows are seeded from `/etc/hil/hosts.yaml`. Periodic health
 probes (SSH `true` over the configured key) update `status` and
@@ -243,13 +250,16 @@ dashboard without editing YAML.
 | `id`              | UUIDv7, sortable.                                           |
 | `submitted_by`    | Token id or OIDC subject (repo+workflow+ref).               |
 | `repo`            | `owner/name` from auth context, not request body.           |
-| `request`         | JSON: device selector, script name, params, artifact ref.   |
+| `request`         | JSON: target selector, script name, params, payload, secrets_profile, flags. |
+| `secrets_profile` | Resolved profile id (see §5.8), pinned at submission time so a hot-reload of the policy file doesn't change what a queued job sees. |
+| `exclusive_host`  | Bool. If true, the job takes an exclusive lock on its assigned host: no other job may run there, and the worker can attribute every `dmesg` / `usbmon` / serial line unambiguously. Trade-off: blocks other jobs on the same host for the duration, so reserve it for hard-to-trace problems. |
 | `state`           | See state machine below.                                    |
+| `assigned_host`   | Filled in at `assigned` transition.                         |
 | `assigned_device` | Filled in at `assigned` transition.                         |
 | `created_at`, `started_at`, `finished_at`                                       |
 | `result`          | `pass` / `fail` / `error` / `timeout` / `cancelled`.        |
 | `summary`         | Short human string for dashboard rows.                      |
-| `artifacts`       | List of saved files: serial log, camera frames, exit codes. |
+| `artifacts`       | List of saved files: serial log, camera frames, exit codes, dmesg/usbmon (when exclusive_host=true). |
 
 ### 5.4 Job event log
 
@@ -459,6 +469,75 @@ Re-running the importer is non-destructive — humans own the final
 `topology.yaml`; the importer regenerates a side-by-side `*.imported`
 file for diffing.
 
+### 5.8 Secret profile
+
+A *secret profile* is the named bundle of credentials the controller
+materialises onto a HIL host at deploy/flash time. Profiles let us
+target the bench ProtoMQ broker, an Adafruit IO test account, or the
+live Adafruit IO production endpoint with the same job-submission
+body — the caller picks a profile name (or the policy picks one for
+them) and the controller substitutes the right values into the
+rendered `secrets.json` / `.env`.
+
+```yaml
+# /etc/hil/secrets-profiles.yaml  (illustrative)
+profiles:
+  - id: bench-protomq           # default; bench ProtoMQ broker, throw-away test AIO account
+    io_url:  pi5-protomq.local
+    io_port: 1884
+    io_username: ${env:HIL_BENCH_AIO_USERNAME}
+    io_key:      ${env:HIL_BENCH_AIO_KEY}
+    wifi_ssid:     ${env:HIL_BENCH_WIFI_SSID}
+    wifi_password: ${env:HIL_BENCH_WIFI_PASSWORD}
+
+  - id: live-io-test            # live io.adafruit.com, a dedicated test account
+    io_url:  io.adafruit.com
+    io_port: 8883
+    io_username: ${env:HIL_LIVE_AIO_TEST_USERNAME}
+    io_key:      ${env:HIL_LIVE_AIO_TEST_KEY}
+    wifi_ssid:     ${env:HIL_BENCH_WIFI_SSID}
+    wifi_password: ${env:HIL_BENCH_WIFI_PASSWORD}
+
+  - id: live-io-prod            # live io.adafruit.com, production account — guarded
+    io_url:  io.adafruit.com
+    io_port: 8883
+    io_username: ${env:HIL_LIVE_AIO_PROD_USERNAME}
+    io_key:      ${env:HIL_LIVE_AIO_PROD_KEY}
+    wifi_ssid:     ${env:HIL_BENCH_WIFI_SSID}
+    wifi_password: ${env:HIL_BENCH_WIFI_PASSWORD}
+    requires_trusted: true       # only callers with the `trusted-firmware` policy bit
+```
+
+| Field              | Notes                                                       |
+|--------------------|-------------------------------------------------------------|
+| `id`               | Stable slug. Pinned on the Job row at submission.           |
+| `io_url`, `io_port`| MQTT broker the firmware will talk to.                      |
+| `io_username`, `io_key` | AIO credentials. Stored only as `${env:...}` references — never plaintext in the YAML. The controller reads the actual values from systemd `EnvironmentFile=` or a sealed `/etc/hil/secrets.env` at startup. |
+| `wifi_ssid`, `wifi_password` | Network creds for the DUT to reach the broker.    |
+| `extra`            | Optional dict of additional key/values for arbitrary firmware-specific secrets the test happens to need. |
+| `requires_trusted` | Bool. If true, the auth policy must grant the caller the `trusted-firmware` capability to use this profile. |
+
+Policy (§8.1, §8.2) maps a principal to a list of allowed profile
+ids and, optionally, a default. Jobs submitted without an explicit
+`secrets_profile` get the principal's default; jobs requesting a
+profile outside the allow-list are rejected at the API boundary.
+
+Materialisation flow (controller-side, per job):
+
+1. Load the resolved profile values into memory.
+2. Render the relevant `examples/.../secrets.example.json` (or `.env`)
+   with `envsubst` into the job's per-host scratch directory.
+3. `copy_to` the rendered file to `/tmp/hil/<job-id>/secrets.json`
+   on the HIL host, mode `0400`, owner `pi`.
+4. Worker invokes the flash/deploy adapter, which references the
+   secrets path.
+5. At job terminal (success, failure, or cancel), the worker
+   `rm -f`s the secrets file before releasing the device. SQLite
+   records that the file was wiped but **never the contents**.
+
+The controller never echoes a profile's secret values back through
+the API — `/v1/jobs/{id}` shows only the profile id used.
+
 ## 6. Job state machine
 
 ```
@@ -509,6 +588,8 @@ writes. Dashboard at `/`.
 
 ### 7.1 `POST /v1/jobs` body
 
+Microcontroller job — firmware binary + named test script:
+
 ```json
 {
   "target": {
@@ -519,34 +600,77 @@ writes. Dashboard at `/`.
     ],
     "pool": "public"
   },
-  "script": "protomq.validate-logs",            // allow-listed name
-  "params": { "scenario": "boot-handshake" },   // passed to the script
-  "artifact": {
-    "kind": "github-release",                   // or "github-actions-artifact", "url+sha256"
-    "repo": "owner/name",
-    "tag": "v1.2.3",
-    "asset": "firmware.bin",
-    "sha256": "…"
+  "script": "protomq.validate-logs",
+  "params": { "scenario": "boot-handshake" },
+  "payload": {
+    "kind": "firmware-binary",
+    "source": {
+      "kind": "github-release",                  // or "github-actions-artifact", "url+sha256"
+      "repo": "owner/name",
+      "tag": "v1.2.3",
+      "asset": "firmware.bin",
+      "sha256": "…"
+    }
   },
+  "secrets_profile": "bench-protomq",
+  "exclusive": { "host": false },
   "timeouts": { "total_s": 600, "flash_s": 120, "run_s": 300 },
-  "metadata": { "pr": 42, "commit": "abc1234" }  // surfaced in dashboard
+  "metadata": { "pr": 42, "commit": "abc1234" }
 }
 ```
 
-`target.device` can be a concrete `{ "id": "rp2040-01" }` or an
-abstract selector (`kind` / `model` / `capabilities`); the topology
-resolver picks the least-loaded matching seat. `target.requires` is a
-list of auxiliary selectors that must be physically attached **or
-reachable via a mux** from the chosen device — the resolver runs
-*before* the job is accepted, so callers get a structured 409 with the
-unsatisfiable selector rather than a mid-flash failure.
+SBC job — git clone + ref + entry-point script:
 
-`artifact` is optional — some test scripts (USB-IP attach a device that
-is already provisioned, just exercise it) don't flash anything.
+```json
+{
+  "target": {
+    "device": { "kind": "sbc", "model": "pi5" },
+    "pool": "internal"
+  },
+  "script": "git-clone-and-run",                 // allow-listed entry-point runner
+  "params": { "entry": "tests/run_hil.py", "args": ["--smoke"] },
+  "payload": {
+    "kind": "git-source",
+    "source": {
+      "repo":   "https://github.com/owner/name.git",   // https or ssh
+      "ref":    "abc1234",                              // sha, tag, or branch
+      "submodules": true,
+      "shallow": true,
+      "setup":  ["pip", "install", "-e", "."]           // optional, run after checkout
+    }
+  },
+  "secrets_profile": "live-io-test",
+  "exclusive": { "host": true },                  // SBC hosts already max-1, but flag carries through
+  "timeouts": { "total_s": 1800, "deploy_s": 300, "run_s": 1200 }
+}
+```
+
+Key fields:
+
+- **`target.device`** — concrete `{ "id": "rp2040-01" }` or abstract
+  selector (`kind` / `model` / `capabilities`); the topology
+  resolver picks the least-loaded matching seat.
+- **`target.requires`** — auxiliary selectors that must be physically
+  attached **or reachable via a mux**. Resolver runs *before* the
+  job is accepted, so callers get a structured 409 with the
+  unsatisfiable selector rather than a mid-flash failure.
+- **`payload.kind`** — `firmware-binary` (MCU path, downloaded by
+  hash) or `git-source` (SBC path, cloned + checked out on the HIL
+  host). Optional only for scripts that exercise pre-provisioned
+  hardware (USB-IP attach to an already-flashed device, etc).
+- **`secrets_profile`** — opt-in identifier into §5.8. Omit to use
+  the principal's default profile. Mismatch with the auth policy →
+  403 at submit time.
+- **`exclusive.host`** — when true, the assigned host runs *only*
+  this job for the duration, dmesg/usbmon capture starts, and the
+  job artifacts grow a `host-dmesg.log` and `host-usbmon.pcap` (see
+  §9 for the scheduler interaction and §10 for what gets captured).
+  SBC hosts are already max-1, so the flag is a no-op there; on
+  rpi-displays it actually changes behaviour.
 
 CI that wants to see what's available before submitting can call
-`POST /v1/topology/resolve` with the same `target` block and get back
-the candidate seats without enqueueing anything.
+`POST /v1/topology/resolve` with the same `target` block and get
+back the candidate seats without enqueueing anything.
 
 ### 7.2 Long-poll semantics
 
@@ -591,22 +715,35 @@ downstream policy checks against.
   it), `exp`/`iat`.
 - Claim → `Principal` mapping uses `repository`, `repository_owner`,
   `ref`, `workflow`, `job_workflow_ref`, `environment`.
-- Policy file (YAML, hot-reloaded) maps claims to device pools, e.g.:
+- Policy file (YAML, hot-reloaded) maps claims to device pools and
+  secret profiles (§5.8), and optionally grants capabilities. E.g.:
 
   ```yaml
   - match: { repository: "adafruit/protomq", ref: "refs/heads/main" }
-    allow_pools: ["public", "protomq"]
+    allow_pools:    ["public", "protomq"]
+    allow_profiles: ["bench-protomq", "live-io-test"]
+    default_profile: bench-protomq
+    capabilities:   []
+  - match: { repository: "adafruit/wippersnapper-arduino-firmware" }
+    allow_pools:    ["public", "protomq", "wippersnapper"]
+    allow_profiles: ["bench-protomq", "live-io-test", "live-io-prod"]
+    default_profile: live-io-test
+    capabilities:   ["trusted-firmware"]   # may run raw-firmware-smoke
   - match: { repository_owner: "adafruit" }
-    allow_pools: ["public"]
+    allow_pools:    ["public"]
+    allow_profiles: ["bench-protomq"]
+    default_profile: bench-protomq
   ```
 
 - No long-lived secret on the CI side; revocation is by editing the
   policy file.
 
-Both paths produce a `Principal { kind, subject, repo, allowed_pools }`
-which the job submission handler uses to (a) reject jobs targeting
-disallowed pools, (b) stamp `repo` and `submitted_by` on the row from
-the auth context, never from the request body.
+Both paths produce a `Principal { kind, subject, repo, allowed_pools,
+allowed_profiles, default_profile, capabilities }` which the job
+submission handler uses to (a) reject jobs targeting disallowed
+pools or profiles, (b) gate access to permissive scripts behind the
+`trusted-firmware` capability, (c) stamp `repo` and `submitted_by`
+on the row from the auth context, never from the request body.
 
 ## 9. Scheduler & worker
 
@@ -614,20 +751,37 @@ the auth context, never from the request body.
   (b) device freed, (c) host status change, (d) periodic tick.
 - Per-device `asyncio.Lock`. A job in `assigned`+ holds its device's
   lock until terminal.
+- **Per-host concurrency**: each Host row carries
+  `max_concurrent_jobs` (§5.1). The scheduler models it as a
+  per-host `asyncio.Semaphore`. SBC hosts (`rpi-hil00N`) default to
+  1 — a SBC HIL host runs one test or suite at a time, period.
+  Microcontroller hosts (`rpi-displays`) default to unbounded; per-
+  device locks are the real constraint there.
+- **Per-host exclusive lock** (for `exclusive_host: true` jobs):
+  separate from the semaphore, a per-host `asyncio.Lock` that is
+  acquired *write-style*. Semantics:
+  - A job requesting `exclusive.host = true` must wait until every
+    other in-flight job on that host has reached terminal.
+  - Once an exclusive job is `queued` for a host, the scheduler
+    refuses to *start* further non-exclusive jobs on that host
+    (existing in-flight ones drain). This prevents an exclusive job
+    from being starved by a steady drip of regular jobs.
+  - While an exclusive job is running, the worker turns on dmesg
+    capture (`journalctl -k -f`) and usbmon (`cat /sys/kernel/debug/
+    usb/usbmon/0u` or `tcpdump -i usbmonX -w …`) on the HIL host;
+    artifacts grow `host-dmesg.log` and `host-usbmon.pcap`. These
+    captures are unambiguous because no other job is touching the
+    USB bus on that host for the duration.
 - **Routing at assignment**: the resolver picks a `(host, device,
-  aux bindings, mux ops)` tuple. The worker then opens a transport
-  session against `device.host_id` and runs every adapter call
-  through it; nothing about the work itself happens on the
-  controller. Hosts in `offline` or `quarantined` status are filtered
-  out of resolution.
+  aux bindings, mux ops)` tuple — taking host semaphore availability
+  and the exclusive-pending state into account. The worker opens a
+  transport session against `device.host_id` and runs every adapter
+  call through it; nothing about the work itself happens on the
+  controller. Hosts in `offline` or `quarantined` status are
+  filtered out of resolution.
 - Worker per active job (`asyncio.create_task`). Worker drives the
   state machine, emits events, calls into the device adapter (which
   in turn goes through the host transport).
-- Concurrency cap = number of devices, *not* number of hosts: many
-  jobs can run in parallel on the same host as long as they target
-  different devices. Per-host backpressure (e.g. "don't run more
-  than N concurrent flashes on rpi-displays") is a per-host config
-  knob if the bench needs it later.
 - Graceful shutdown: scheduler stops accepting new starts, in-flight
   workers get a `cancel()` budget which propagates as SSH session
   close on the HIL host, then process exits. SQLite state is the
@@ -707,9 +861,27 @@ HIL host:
   1200-baud CDC sentinel (RP2040 BOOTSEL chain, see
   `vendor/hil-detection/scripts/pico_hil_flash.sh` for the three-
   stage strategy already in use), `uf2-msc` (mount the BOOTSEL drive
-  and copy `.uf2`), a Python-Wippersnapper installer over SSH for
-  SBCs, an Arduino-sketch upload, or "no-op" for pre-provisioned
-  devices.
+  and copy `.uf2`), an Arduino-sketch upload, or "no-op" for
+  pre-provisioned devices. Selected via `payload.kind ==
+  "firmware-binary"` plus the device's `flasher` field.
+- `GitDeploy` — the SBC-side counterpart of the flashers. Triggered
+  by `payload.kind == "git-source"`. Steps, all over the host
+  transport, all on the SBC HIL host's filesystem:
+  1. `git clone --depth=1 --branch=<ref>` (or full clone + checkout
+     if `shallow=false`); `--recurse-submodules` if requested.
+  2. Render the chosen secrets profile (§5.8) into the workspace —
+     `secrets.json` for the long-running Python-Wippersnapper client,
+     `.env` for pytest runs.
+  3. Optional `payload.source.setup` argv list (typically
+     `pip install -e .` or `npm ci`).
+  4. Hand off to the test runner (§11) with the workspace path and
+     the chosen `params.entry` script.
+  5. On terminal, wipe the secrets file (§5.8 step 5) and remove the
+     workspace.
+  Note: a Python-Wippersnapper *installer* (deploy the long-lived
+  client onto an SBC and start it as a service) is a small wrapper
+  around `GitDeploy` that runs a systemd-unit install step after
+  setup; it isn't a separate Flasher.
 - `SerialCapture` — opens a streaming SSH channel against the host's
   `/dev/serial/by-id/...` (stable ID, because `ttyACM*` numbering is
   unstable across re-enumeration). Line-buffered, tee'd to both the
@@ -757,6 +929,32 @@ stream, and helpers like `expect_serial("READY", timeout=10)` and
 Allow-list of script names lives in config; submissions referencing an
 unknown name — or a known name whose `REQUIRES` cannot be satisfied by
 any seat in the caller's pool — are rejected at the API boundary.
+
+Two **permissive built-ins** exist for the "trusted user wants to
+test something unknown" case, both gated by the `trusted-firmware`
+policy capability (§8 / §5.8 `requires_trusted`):
+
+- `raw-firmware-smoke` — for the MCU path. Flashes the
+  `payload.firmware-binary`, resets the device, opens serial, and
+  streams whatever comes out for `params.observe_s` seconds. The
+  script doesn't assert anything itself; the job result is `pass`
+  unless the flasher itself failed or the device never enumerated
+  back. Useful for "does this firmware boot at all" smoke tests
+  against unfamiliar code.
+- `git-clone-and-run` — for the SBC path. After `GitDeploy` lands
+  the workspace and the secrets file, this script just invokes
+  `params.entry` with `params.args` and propagates the exit code
+  (0 → pass, non-zero → fail). The caller's repo decides what
+  counts as a passing test.
+
+Both built-ins still capture serial, dmesg (when exclusive), camera
+frames, and the standard artifact set, so failure diagnosis isn't
+worse than for a curated script — just the *assertion* is the
+caller's responsibility. The `trusted-firmware` gate exists because
+these scripts are the only path through which caller-controlled
+binaries / code execute on bench hardware with bench secrets in
+scope; the gate is what makes "trusted users testing unknown
+firmware in unknown ways" a tractable trust boundary (§15 OQ15).
 
 ### 11.1 Wippersnapper firmware variants
 
@@ -857,7 +1055,33 @@ See §15 open question 7 for the manifest ownership choice.
 - Per-pool rate limits on job submission to prevent a runaway CI
   matrix from monopolising hardware.
 - Audit table records every authenticated request (principal, route,
-  job id, **target host**, decision) with a 30-day retention.
+  job id, **target host**, **secrets profile id**, decision) with a
+  30-day retention.
+
+**Secret profiles**
+
+- Profile values are referenced from `secrets-profiles.yaml` as
+  `${env:NAME}` only; the YAML file itself contains no plaintext
+  credentials. Actual values are read from a systemd
+  `EnvironmentFile=/etc/hil/secrets.env` (mode `0400`, owner `hil`)
+  loaded once at controller start.
+- The controller never echoes a profile's secret values back through
+  the API or to the dashboard. `/v1/jobs/{id}` shows only the
+  profile *id* used. The audit log records the id, not the values.
+- Rendered `secrets.json` / `.env` files are written to the HIL
+  host's `/tmp/hil/<job-id>/`, mode `0400`, owner `pi`. On job
+  terminal the worker `rm -f`s them before releasing the device.
+  The event log records that the wipe happened, never the file's
+  contents.
+- Profiles with `requires_trusted: true` (e.g. `live-io-prod`) are
+  only available to principals carrying the `trusted-firmware`
+  capability — a deliberate brake on production-account exposure.
+- Exclusive-host jobs that capture `host-dmesg.log` and
+  `host-usbmon.pcap` get a sanitisation pass on the way back: any
+  byte sequence matching a known-secret pattern (a profile value
+  loaded for *this* job) is replaced with `***` before the artifact
+  is persisted. Imperfect (binary in pcap may evade naive matching),
+  but a basic filter against accidental log-disclosure.
 
 **HIL hosts (rpi-displays, rpi-hil00N)**
 
@@ -1002,17 +1226,45 @@ Things worth resolving before implementation, in rough priority order:
     only needs the controller in its allow-list; (b) is faster
     when the artifact is large and the controller-to-HIL link is
     slow. Recommend (a) for v1.
-13. **Per-host concurrency caps.** A noisy flash can saturate
-    rpi-displays' USB bus and disturb concurrent jobs on the same
-    hub. v1 starts with no per-host cap (concurrency = number of
-    devices); add a `max_concurrent_jobs` per Host row if we see
-    interference on the bench.
-14. **SBC test execution shape.** SBC DUTs on `rpi-hil00N` don't
-    have a "flash" step in the microcontroller sense — they have a
-    "deploy a Python package + secrets.json + restart the service"
-    step. Confirm whether that's modelled as a flasher
-    (`snapper-python` adapter) or as a distinct deploy phase in the
-    job state machine before §6 ossifies further.
+13. **Per-host concurrency caps.** ~~A noisy flash can saturate
+    rpi-displays' USB bus.~~ **Resolved**: Host rows carry
+    `max_concurrent_jobs` (§5.1). SBC hosts default to `1`,
+    microcontroller hosts unbounded. The `exclusive.host` job flag
+    (§7.1) is the explicit opt-in when a job needs the host to
+    itself for hard-to-trace problems — see §9 for scheduling
+    semantics.
+14. **SBC test execution shape.** ~~Flasher vs distinct phase~~
+    **Resolved**: a SBC payload is `payload.kind == "git-source"`
+    and the controller's `GitDeploy` adapter (§10.2) fills the
+    flasher slot in the state machine — clone, render secrets,
+    optional setup command, hand off to the test runner, wipe
+    secrets at terminal. The microcontroller-style state machine
+    (§6) stays unchanged; "flashing" is the right verb for both
+    paths since both turn a payload into a runnable device state.
+15. **Trust model for arbitrary firmware from trusted users.**
+    Trusted users want to flash binaries we have not vetted and
+    run SBC code we have not reviewed. The current draft cordons
+    this with: (a) `trusted-firmware` capability in the auth
+    policy, (b) `requires_trusted` on sensitive secret profiles
+    (§5.8), (c) permissive built-in scripts (`raw-firmware-smoke`,
+    `git-clone-and-run`) that *only* trusted callers can target.
+    Open: do we additionally want to *snapshot* every binary /
+    cloned tree the trusted path runs (sha256 stored, artifact
+    retained for N days) so a post-hoc forensic investigation is
+    possible? And: is `exclusive.host: true` *required* for the
+    permissive scripts (forcing dmesg/usbmon capture so any weird
+    behaviour leaves a trail), or just recommended?
+16. **Live IO production access from the bench.** Using
+    `secrets_profile: live-io-prod` means a DUT on the bench talks
+    to `io.adafruit.com` with a real production account. Open
+    questions: (a) which AIO sub-account exactly — a dedicated
+    bench account, or a real customer account in a sandboxed
+    feed namespace? (b) is there a rate-limit budget we should
+    enforce on the controller side so a runaway bench doesn't
+    hammer the production broker? (c) do we want a "destructive
+    action" deny-list (no `feed-delete`, no `device-delete`) the
+    controller can enforce by inspecting the protomq exchange,
+    or do we trust the test scripts to be well-behaved?
 
 ## 16. Milestones
 
@@ -1030,15 +1282,27 @@ A suggested cut, each landable on its own:
   yet acted on. Run the protomq + hardware-md importers to seed the
   first manifest with `rpi-displays` and at least one `rpi-hil00N`.
 - **M2** — auth: per-repo bearer tokens + GitHub OIDC verifier,
-  policy file, audit log (incl. target host).
+  policy file (incl. `allow_profiles`, `default_profile`,
+  `capabilities`), audit log (incl. target host + secrets profile id).
+- **M2.5** — secret profiles (§5.8). `secrets-profiles.yaml`,
+  `${env:...}` resolver, `EnvironmentFile=`-backed value loader,
+  per-job rendering into the controller's scratch dir, sanitisation
+  pass on captured artifacts (§12). Validate with `bench-protomq`
+  only; `live-io-test` / `live-io-prod` profiles configured but
+  unused until M5.
 - **M3** — real **SSH host transport** (`asyncssh`, key auth,
   known_hosts pinning, connection pool). Smoke test against
   `rpi-displays` and one `rpi-hil00N`. Per-host health probe.
+  Plumb `max_concurrent_jobs` (per-host semaphore) and
+  `exclusive_host` (per-host write lock) into the scheduler with
+  fake adapters before any real flashing happens.
 - **M3.5** — first real device adapter chain end-to-end against
   `rpi-displays`: serial capture, esptool flasher, one reset path
   via the MCP23017. Drive one microcontroller through the full job
-  state machine. Validate `examples/hil-call.sh` +
-  `example-hil-call.yml` against this pipeline.
+  state machine using the `bench-protomq` profile. Validate
+  `examples/hil-call.sh` + `example-hil-call.yml` against this
+  pipeline. Exercise `exclusive.host: true` (turns on dmesg /
+  usbmon capture) on one debug-flavoured run.
 - **M4** — USB-IP integration via `usbip-autoattach` (server side
   deployed to rpi-displays via the new `deploy/setup-hil-host.sh`),
   solenoid-hub reset, mux adapters, per-device locks respecting the
@@ -1046,14 +1310,19 @@ A suggested cut, each landable on its own:
   Wippersnapper-Arduino targets work end-to-end alongside esptool.
   Port `vendor/hil-detection/tests/conftest.py` to drop the
   hardcoded password (open question 8).
-- **M4.5** — SBC fan-out: drive one `rpi-hil00N` SBC DUT
-  end-to-end. Snapper-Python deploy adapter, secrets-injection at
-  deploy time per `examples/wippersnapper-python/`. Tightens
-  open question 14 (SBC deploy as flasher vs. distinct phase).
-- **M5** — ProtoMQ test helpers, camera capture (with per-host
-  pull-back over the transport), artifact storage, Prometheus
-  metrics. Land the Python Wippersnapper submodule if/when it's
-  reachable (open question 10).
+- **M4.5** — SBC fan-out: drive one `rpi-hil00N` SBC DUT end-to-end
+  via the `GitDeploy` adapter (§10.2). Clone + ref + setup-command
+  + render `secrets.json` from the chosen profile + run the
+  caller's entry point. Land the `git-clone-and-run` built-in
+  script (§11). SBC host concurrency cap of 1 enforced by the
+  M3 scheduler bits.
+- **M5** — ProtoMQ test helpers; camera capture (with per-host
+  pull-back over the transport); artifact storage; Prometheus
+  metrics; the `raw-firmware-smoke` permissive built-in for
+  trusted-firmware callers (§11); turn on `live-io-test` and
+  `live-io-prod` profiles for the policies that need them (open
+  question 16 settled by then). Land the Python Wippersnapper
+  submodule if/when it's reachable (open question 10).
 
 Past M5 we revisit dynamic hardware switching, GitHub check-run
 posting, and the SSH → agent transport upgrade (open question 11)
