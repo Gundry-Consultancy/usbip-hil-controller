@@ -21,7 +21,10 @@ The service is the seam between:
   validation against captured log output).
 
 A thin web UI sits in front of the same API for human inspection of
-queue state, device availability, and per-job logs / artifacts.
+queue state, device availability, the wiring graph (devices + aux +
+mux), and per-job logs / artifacts. The same topology endpoints are
+available to CI so a job can ask "is there a seat for me?" before
+submitting, instead of finding out by failing.
 
 ## 2. Non-goals (v1)
 
@@ -102,6 +105,11 @@ src/
       flashers/            # esptool, picotool, dfu, snapper-py, …
       serial_capture.py
       camera.py            # optional frame grabs alongside serial
+    topology/
+      manifest.py          # YAML loader for devices + aux + mux matrix
+      resolver.py          # selector → (device, aux bindings, mux ops)
+      importers/
+        protomq_scripts.py # scrape display-v2 test scripts → manifest
     tests/
       runner.py            # invokes named scripts from the HIL repo
       protomq.py           # ProtoMQ-specific log-assertion helpers
@@ -120,12 +128,14 @@ code so import paths don't churn.
 
 ### 5.1 Device
 
-A physical thing wired to the Pi. Fixed in v1.
+A physical thing wired to the Pi — the *unit under test*. Fixed in v1.
 
 | Field             | Notes                                                       |
 |-------------------|-------------------------------------------------------------|
 | `id`              | Short stable slug, e.g. `snapper-py-01`.                    |
 | `kind`            | `microcontroller` / `sbc` / `snapper-arduino` / …           |
+| `model`           | More specific tag (`rp2040`, `esp32-s3`, `pi-zero-2w`, …).  |
+| `capabilities`    | Tags the resolver matches on (`spi`, `i2c`, `cdc-acm`, …).  |
 | `usb_path`        | Stable `by-path` or USB-IP busid.                           |
 | `reset_channel`   | Solenoid-hub channel id, nullable if device self-resets.    |
 | `flasher`         | Name of registered flasher adapter.                         |
@@ -134,6 +144,10 @@ A physical thing wired to the Pi. Fixed in v1.
 | `pool`            | Logical grouping for authorization (`public`, `internal`, …).|
 | `exposable_via`   | `local`, `usbip`, or both. Controls remote-attach jobs.     |
 | `status`          | `available` / `in-use` / `quarantined` / `offline`.         |
+
+A device on its own is not usually enough to run a meaningful test —
+you also need the right peripherals wired to it. Those live in
+§5.4 (auxiliary components) and §5.5 (connectivity matrix).
 
 Devices are seeded from a YAML file checked into `deploy/`. The DB row
 is hydrated on startup; humans can mark a device `quarantined` from the
@@ -169,6 +183,104 @@ Powers (a) the long-poll wakeup, (b) the live HTMX log view, (c) audit.
 
 Long-poll clients pass a `since=<seq>` cursor and block on a
 per-job `asyncio.Condition` until new rows land or the timeout fires.
+
+### 5.4 Auxiliary component
+
+An auxiliary is anything that hangs off a device and that a test might
+need to assert against — a display, a sensor, an LED ring, a logic
+analyser channel, a power monitor, a second microcontroller acting as a
+companion. Modelled separately from devices because (a) the same
+physical aux can serve more than one device via a multiplexer, and (b)
+test scripts care about *capabilities*, not which port a thing happens
+to be on this week.
+
+| Field             | Notes                                                       |
+|-------------------|-------------------------------------------------------------|
+| `id`              | Stable slug, e.g. `ili9341-2.4-01`.                         |
+| `kind`            | `display` / `sensor` / `actuator` / `companion-mcu` / …     |
+| `model`           | Specific part, e.g. `ili9341`, `ssd1306`, `bme280`.         |
+| `capabilities`    | Tags the resolver matches on (`display:240x320`, `i2c-target:0x76`). |
+| `interface`       | `spi` / `i2c` / `uart` / `gpio` / `usb-cdc`.                |
+| `signals`         | Logical names → bus pin/line (`mosi`, `cs`, `sda`, `int`).  |
+| `observability`   | How the controller can read it back: `camera`, `serial-tap`, `i2c-sniffer`, or `none`. |
+| `pool`            | Same authorization model as devices.                        |
+| `status`          | `available` / `in-use` / `faulty` / `offline`.              |
+
+Aux records are seeded from the same YAML manifest as devices. The
+manifest is also the place where physical wiring gets recorded —
+today that knowledge lives implicitly inside the protomq display-v2
+test scripts (see §15 open question 7).
+
+### 5.5 Connectivity matrix (multiplex)
+
+Most aux-to-device wiring in v1 is **fixed**: aux `X` is bolted to
+device `Y` and only `Y`. But some test rigs route auxes through a
+mux — a TCA9548 I²C switch, an SPI mux, a relay-controlled GPIO
+cross-bar, a USB hub with per-port power control. The manifest models
+this uniformly so the scheduler can answer "can I give job J a device
+of kind K with a 240x320 SPI display attached?" without the caller
+knowing which physical seats satisfy that.
+
+```yaml
+# /etc/hil/topology.yaml  (excerpt, illustrative)
+devices:
+  - id: rp2040-01
+    kind: microcontroller
+    model: rp2040
+    pool: public
+  - id: esp32s3-01
+    kind: microcontroller
+    model: esp32-s3
+    pool: public
+
+auxes:
+  - id: ili9341-2.4-01
+    kind: display
+    model: ili9341
+    interface: spi
+    capabilities: [display, "display:240x320", "display:spi"]
+    observability: camera
+  - id: bme280-01
+    kind: sensor
+    model: bme280
+    interface: i2c
+    capabilities: [sensor, "sensor:env", "i2c-target:0x76"]
+
+connections:
+  # Fixed wiring: aux belongs to exactly one device.
+  - aux: bme280-01
+    device: rp2040-01
+    bus: i2c0
+
+  # Multiplexed: aux can be routed to any of several devices via a mux.
+  - aux: ili9341-2.4-01
+    via:
+      mux: spi-mux-01
+      channels:
+        rp2040-01: 0
+        esp32s3-01: 1
+
+muxes:
+  - id: spi-mux-01
+    kind: spi
+    control: { adapter: gpio-relay, channel: 3 }
+    exclusive: true       # only one downstream device active at a time
+```
+
+Three resolver rules fall out of this:
+
+1. **Fixed-wired aux** is implicitly locked when its device is locked.
+2. **Multiplexed aux** is a separate lockable resource; the scheduler
+   acquires `(device, aux, mux)` together, then issues a mux switch
+   adapter call before the worker enters `preparing`.
+3. **Exclusive muxes** serialise across all downstream devices for the
+   duration of any job that uses *any* aux on that mux. The resolver
+   reports this so the dashboard can show why a device is blocked even
+   though it looks idle.
+
+If no mux exists, jobs that need an aux the assigned device can't
+reach are rejected at submission time with a structured error rather
+than failing mid-flash.
 
 ## 6. Job state machine
 
@@ -207,16 +319,27 @@ writes. Dashboard at `/`.
 | GET    | `/v1/jobs/{id}/logs?since=`       | required | Same as wait but non-blocking; for tools that prefer polling. |
 | GET    | `/v1/jobs/{id}/artifacts/{name}`  | required | Stream a captured artifact (serial log, frame, etc). |
 | POST   | `/v1/jobs/{id}/cancel`            | required | Best-effort cancel.                      |
-| GET    | `/v1/devices`                     | required | List devices visible to the caller's pool. |
-| GET    | `/v1/devices/{id}`                | required | Device detail + current job, if any.     |
+| GET    | `/v1/devices`                     | required | List devices visible to the caller's pool. Supports `?kind=&model=&capability=&aux=&pool=` filters; `?include=aux,connections` to expand. |
+| GET    | `/v1/devices/{id}`                | required | Device detail + current job + attached/reachable aux. |
+| GET    | `/v1/aux`                         | required | List auxiliary components. Same filter/include grammar. |
+| GET    | `/v1/aux/{id}`                    | required | Aux detail + which devices it can be routed to (and via which mux). |
+| GET    | `/v1/topology`                    | required | Full graph: devices, auxes, muxes, connections. Suitable for the dashboard's wiring view and for CI to introspect before submission. |
+| POST   | `/v1/topology/resolve`            | required | Dry-run a job selector → returns matching `(device, aux bindings, mux ops)` candidates and any structured rejection reason. No job is created. |
 | GET    | `/healthz`, `/readyz`             | none     | Liveness / readiness.                    |
-| GET    | `/`, `/jobs`, `/jobs/{id}`, `/devices` | none (read-only) | HTMX dashboard pages.    |
+| GET    | `/`, `/jobs`, `/jobs/{id}`, `/devices`, `/topology` | none (read-only) | HTMX dashboard pages.    |
 
 ### 7.1 `POST /v1/jobs` body
 
 ```json
 {
-  "device": { "id": "snapper-py-01" },         // or { "kind": "...", "pool": "..." }
+  "target": {
+    "device": { "kind": "microcontroller", "model": "rp2040" },
+    "requires": [
+      { "kind": "display", "capabilities": ["display:240x320", "display:spi"] },
+      { "kind": "sensor",  "model": "bme280" }
+    ],
+    "pool": "public"
+  },
   "script": "protomq.validate-logs",            // allow-listed name
   "params": { "scenario": "boot-handshake" },   // passed to the script
   "artifact": {
@@ -231,8 +354,20 @@ writes. Dashboard at `/`.
 }
 ```
 
+`target.device` can be a concrete `{ "id": "rp2040-01" }` or an
+abstract selector (`kind` / `model` / `capabilities`); the topology
+resolver picks the least-loaded matching seat. `target.requires` is a
+list of auxiliary selectors that must be physically attached **or
+reachable via a mux** from the chosen device — the resolver runs
+*before* the job is accepted, so callers get a structured 409 with the
+unsatisfiable selector rather than a mid-flash failure.
+
 `artifact` is optional — some test scripts (USB-IP attach a device that
 is already provisioned, just exercise it) don't flash anything.
+
+CI that wants to see what's available before submitting can call
+`POST /v1/topology/resolve` with the same `target` block and get back
+the candidate seats without enqueueing anything.
 
 ### 7.2 Long-poll semantics
 
@@ -354,15 +489,41 @@ named, versioned entry points provided either by:
 A script signature:
 
 ```python
+REQUIRES = TopologySpec(
+    device={"kind": "microcontroller", "capabilities": ["spi"]},
+    aux=[
+        {"kind": "display", "capabilities": ["display:240x320", "display:spi"]},
+    ],
+)
+
 async def run(ctx: TestContext, params: dict) -> TestResult: ...
 ```
 
-`TestContext` exposes the adapter handle, a `log()` helper that goes to
-the event stream, and helpers like `expect_serial("READY", timeout=10)`
-and `assert_log_contains(pattern)` for the ProtoMQ case.
+Each script declares a `REQUIRES` topology spec. The dashboard's
+script catalogue and `GET /v1/topology/resolve` both use it so a
+caller can ask "which seats can run `protomq.display-smoke` right
+now?" without reading the script source.
+
+`TestContext` exposes the adapter handle, the bound aux handles
+(`ctx.aux["display"]`), a `log()` helper that goes to the event
+stream, and helpers like `expect_serial("READY", timeout=10)` and
+`assert_log_contains(pattern)` for the ProtoMQ case.
 
 Allow-list of script names lives in config; submissions referencing an
-unknown name are rejected at the API boundary.
+unknown name — or a known name whose `REQUIRES` cannot be satisfied by
+any seat in the caller's pool — are rejected at the API boundary.
+
+### 11.1 Importing from the protomq display-v2 scripts
+
+The current source of truth for which board is wired to which display
+lives implicitly inside the test scripts in the protomq repo's
+`display-v2` branch (`scripts/` folder). Until those scripts are
+ported to declare a `REQUIRES` block, the topology importer
+(`src/hil_controller/topology/importers/protomq_scripts.py`) will
+parse them and emit a starting `topology.yaml` plus a list of scripts
+whose wiring it could not infer. That bootstrap is one-shot; after the
+manifest exists, the scripts get rewritten to consume `ctx.aux[...]`
+instead of hard-coded pin assignments. See §15 open question 7.
 
 ## 12. Security posture
 
@@ -424,6 +585,19 @@ Things worth resolving before implementation, in rough priority order:
    Storage cost vs. debuggability.
 6. **Snapper-Python / Snapper-Arduino flashing.** Confirm the exact
    tooling so the flasher adapters can be specced precisely.
+7. **Topology source of truth.** Today, the wiring between a board and
+   its display/sensors is encoded inside the protomq display-v2 test
+   scripts. Two choices: (a) write a one-shot importer that parses
+   those scripts into the new `topology.yaml`, then have us own the
+   manifest going forward; (b) keep the scripts authoritative and have
+   the controller call into them to discover topology at boot. (a)
+   gives us a queryable graph and a dashboard wiring view for free but
+   creates a fork point with the protomq repo; (b) avoids the fork but
+   means the resolver can't reason about availability without
+   executing user code. Recommend (a). Either way, what mux hardware
+   (if any) is currently in the rig — TCA9548, SPI mux, relay
+   crossbar, USB-hub power control — needs confirming so the mux
+   adapters can be specced.
 
 ## 16. Milestones
 
@@ -434,12 +608,17 @@ A suggested cut, each landable on its own:
 - **M1** — domain model, SQLite schema, in-memory scheduler, fake
   adapter, end-to-end `POST /v1/jobs` → `wait` → `finished` against
   the fake. HTMX dashboard shows queue.
+- **M1.5** — topology manifest loader + resolver + `/v1/devices`,
+  `/v1/aux`, `/v1/topology`, `/v1/topology/resolve` endpoints. Fixed
+  wiring only; mux modelled in the schema but not yet acted on. Run
+  the protomq display-v2 importer to seed the first manifest.
 - **M2** — auth: per-repo bearer tokens + GitHub OIDC verifier, policy
   file, audit log.
 - **M3** — real adapters: serial capture, one flasher (esptool), one
   reset path. Drive a single fixed microcontroller end-to-end.
 - **M4** — USB-IP integration via usbip-auto-attach, solenoid-hub
-  reset, multi-device scheduling.
+  reset, mux adapters, multi-device scheduling with resource locks
+  that respect the connectivity matrix.
 - **M5** — ProtoMQ test helpers, camera capture, artifact storage,
   Prometheus metrics.
 
