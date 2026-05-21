@@ -16,13 +16,25 @@ The service is the seam between:
 
 - **Caller side** — a CI step that submits a job and waits for a result
   (long-poll, up to ~5 min per call, re-issued on timeout).
-- **Pi side** — runs on `rpi-displays` (the DUT controller Pi Zero 2W,
-  `192.168.1.234`), orchestrates flashing, reset (via the MCP23017
-  solenoid driver on the Genesys USB hub), serial capture, optional
-  USB-IP attach, and runs the canned test script. A separate Pi 5 at
-  `192.168.1.210` runs the ProtoMQ broker the DUTs talk to during
-  protomq-flavoured tests; the controller observes the broker but
-  doesn't host it.
+- **Controller host** — runs *this* repository. An independent host
+  (any Linux box with network reachability to the bench), **not** one
+  of the HIL hosts itself. Owns the API, the dashboard, the SQLite
+  job store, and the scheduler. Does not have any DUTs attached to
+  it.
+- **HIL host fleet** — a set of bench Pis the controller fans work
+  out to over SSH. Each HIL host owns a slice of the DUTs:
+  - `rpi-displays` (Pi Zero 2W, `192.168.1.234`) — **all microcontroller
+    DUTs**, attached via the Genesys USB hub with MCP23017 solenoid
+    power/reset control at I²C `0x20`.
+  - `rpi-hil001` … `rpi-hil007` (one per host) — **single-board-computer
+    DUTs**, currently on a separate USB hub without per-port power
+    control. Independent port-power control is planned for parity with
+    rpi-displays.
+  - SSH access on every HIL host is via key-based auth to the `pi`
+    user; the controller holds the private key.
+- **ProtoMQ broker host** — `pi5-protomq` (`192.168.1.210`, MQTT
+  `1884`). DUTs talk to it as MQTT clients during protomq-flavoured
+  tests; the controller observes the broker but doesn't host it.
 
 A thin web UI sits in front of the same API for human inspection of
 queue state, device availability, the wiring graph (devices + aux +
@@ -45,31 +57,48 @@ submitting, instead of finding out by failing.
 ## 3. Top-level shape
 
 ```
-                +-----------------------------------+
-   GitHub CI ── │   FastAPI app (single process)    │ ── HTMX dashboard
-   (POST job,   │                                   │    (same origin)
-    long-poll)  │  ┌──────────┐   ┌──────────────┐  │
-                │  │  HTTP /  │   │ Background   │  │
-                │  │  HTMX    │──▶│ worker pool  │──┼──▶ Hardware adapters
-                │  │  router  │   │ (asyncio)    │  │     (USB-IP, flash,
-                │  └────┬─────┘   └──────┬───────┘  │      serial, reset)
-                │       │                │          │
-                │       ▼                ▼          │
-                │   ┌─────────────────────────┐    │
-                │   │  SQLite (jobs, events,  │    │
-                │   │  devices, tokens, audit)│    │
-                │   └─────────────────────────┘    │
-                +-----------------------------------+
-                              │
-                              ▼
-                External repos shelled out to:
-                - usbip-auto-attach   (USB-IP client management)
-                - hil-testing repo    (named test scripts / fixtures)
-                - flash tools         (esptool, picotool, dfu-util, …)
+                +--------------------------------------+
+   GitHub CI ── │   Controller host (this repo)        │ ── HTMX dashboard
+   (POST job,   │   FastAPI app (single process)       │    (same origin)
+    long-poll)  │                                      │
+                │  ┌──────────┐   ┌──────────────┐    │
+                │  │  HTTP /  │   │ Scheduler +  │    │
+                │  │  HTMX    │──▶│ worker pool  │────┼────────────────────┐
+                │  │  router  │   │ (asyncio)    │    │  per-host SSH      │
+                │  └────┬─────┘   └──────┬───────┘    │  transport         │
+                │       │                │            │                    │
+                │       ▼                ▼            │                    │
+                │   ┌─────────────────────────┐      │                    │
+                │   │  SQLite (jobs, events,  │      │                    │
+                │   │  devices, hosts, tokens,│      │                    │
+                │   │  audit)                 │      │                    │
+                │   └─────────────────────────┘      │                    │
+                +--------------------------------------+                    │
+                                                                            │
+                                  ┌─────────────────────────────────────────┘
+                                  │
+                                  ▼
+                       HIL host fleet (each owns its DUTs)
+                       ┌──────────────────────────────────────────────┐
+                       │ rpi-displays — microcontroller DUTs          │
+                       │   Genesys USB hub + MCP23017 solenoid (0x20) │
+                       │   /dev/serial/by-id/..., esptool, picotool   │
+                       │   vendor/usbip-autoattach (server side)      │
+                       ├──────────────────────────────────────────────┤
+                       │ rpi-hil001 … rpi-hil007 — SBC DUTs           │
+                       │   (per-port power control planned)           │
+                       └──────────────────────────────────────────────┘
+
+                       ProtoMQ broker host (read-only observer)
+                       ┌──────────────────────────────────────────────┐
+                       │ pi5-protomq — MQTT 1884, web UI 5173         │
+                       └──────────────────────────────────────────────┘
 ```
 
-One process, one SQLite file, async workers in the same event loop. No
-Redis, no Celery, no external broker in v1.
+One controller process, one SQLite file, async workers in the same
+event loop. No Redis, no Celery, no external broker in v1. Each
+worker holds an SSH session to the HIL host that owns its assigned
+device; the work happens *there*, not on the controller.
 
 ## 4. Repository layout (proposed)
 
@@ -120,12 +149,17 @@ src/
       scheduler.py         # in-process scheduler, per-device locks
       worker.py            # job runner state machine
       events.py            # append-only log + long-poll wakeups
+    hosts/
+      base.py              # HostTransport protocol (exec, copy_to, copy_from, stream)
+      ssh.py               # default transport: asyncssh-based, key auth
+      agent.py             # future: HTTP agent transport (see §15 OQ11)
+      registry.py          # host pool from YAML, health checks, key paths
     adapters/
-      base.py              # DeviceAdapter protocol
-      usbip.py             # shells out to usbip-auto-attach
-      solenoid_hub.py      # USB hub + solenoid reset
-      flashers/            # esptool, picotool, dfu, snapper-py, …
-      serial_capture.py
+      base.py              # DeviceAdapter protocol — calls into the HostTransport
+      usbip.py             # invokes vendor/usbip-autoattach on the remote host
+      solenoid_hub.py      # invokes vendor/hil-detection/usb_hub.py on the remote host
+      flashers/            # esptool, picotool, dfu, uf2-msc, snapper-py, …
+      serial_capture.py    # streams the remote /dev/serial/by-id/... over SSH
       camera.py            # optional frame grabs alongside serial
     topology/
       manifest.py          # YAML loader for devices + aux + mux matrix
@@ -149,34 +183,60 @@ code so import paths don't churn.
 
 ## 5. Domain model
 
-### 5.1 Device
+### 5.1 Host
 
-A physical thing wired to the Pi — the *unit under test*. Fixed in v1.
+A HIL host the controller can fan work out to. Modelled as a
+first-class entity because devices, auxes, muxes, and per-job
+adapter calls are all scoped to one. The controller itself does *not*
+have a Host row — it's the orchestrator, not a worker.
 
 | Field             | Notes                                                       |
 |-------------------|-------------------------------------------------------------|
-| `id`              | Short stable slug, e.g. `snapper-py-01`.                    |
+| `id`              | Stable slug, e.g. `rpi-displays`, `rpi-hil003`.             |
+| `role`            | `microcontroller-fleet` / `sbc-fleet` / `protomq-broker`.   |
+| `addr`            | Hostname or IP.                                             |
+| `transport`       | `ssh` (v1 default) or `agent` (see §15 OQ11).               |
+| `ssh_user`        | Default `pi`.                                               |
+| `ssh_key_path`    | Path on the controller filesystem to the per-host key.      |
+| `capabilities`    | Tags the resolver can require, e.g. `power-control`,        |
+|                   | `usbip-server`, `mcp23017`, `cameras`.                      |
+| `status`          | `available` / `quarantined` / `offline`.                    |
+| `last_seen_at`    | Updated by periodic health probe.                           |
+
+Host rows are seeded from `/etc/hil/hosts.yaml`. Periodic health
+probes (SSH `true` over the configured key) update `status` and
+`last_seen_at` so the dashboard can show offline hosts before a job
+is wasted.
+
+### 5.2 Device
+
+A physical thing wired to a HIL host — the *unit under test*.
+
+| Field             | Notes                                                       |
+|-------------------|-------------------------------------------------------------|
+| `id`              | Short stable slug, e.g. `qtpy-s3-01`, `rpi-hil003-pi5b`.    |
+| `host_id`         | FK to the Host that owns this device.                       |
 | `kind`            | `microcontroller` / `sbc` / `snapper-arduino` / …           |
 | `model`           | More specific tag (`rp2040`, `esp32-s3`, `pi-zero-2w`, …).  |
 | `capabilities`    | Tags the resolver matches on (`spi`, `i2c`, `cdc-acm`, …).  |
-| `usb_path`        | Stable `by-path` or USB-IP busid.                           |
-| `reset_channel`   | Solenoid-hub channel id, nullable if device self-resets.    |
+| `usb_path`        | Stable `by-path` or USB-IP busid (on the owning host).      |
+| `reset`           | `{ mux, channel, profile }` — nullable if device self-resets. |
 | `flasher`         | Name of registered flasher adapter.                         |
-| `serial_port`     | `/dev/serial/by-id/...`, baud, parity.                      |
-| `camera_id`       | Optional v4l2 device watching this position.                |
+| `serial_port`     | `/dev/serial/by-id/...` *on the host*, baud, parity.        |
+| `camera_id`       | Optional v4l2 device on the host watching this position.    |
 | `pool`            | Logical grouping for authorization (`public`, `internal`, …).|
 | `exposable_via`   | `local`, `usbip`, or both. Controls remote-attach jobs.     |
 | `status`          | `available` / `in-use` / `quarantined` / `offline`.         |
 
 A device on its own is not usually enough to run a meaningful test —
 you also need the right peripherals wired to it. Those live in
-§5.4 (auxiliary components) and §5.5 (connectivity matrix).
+§5.5 (auxiliary components) and §5.6 (connectivity matrix).
 
 Devices are seeded from a YAML file checked into `deploy/`. The DB row
 is hydrated on startup; humans can mark a device `quarantined` from the
 dashboard without editing YAML.
 
-### 5.2 Job
+### 5.3 Job
 
 | Field             | Notes                                                       |
 |-------------------|-------------------------------------------------------------|
@@ -191,7 +251,7 @@ dashboard without editing YAML.
 | `summary`         | Short human string for dashboard rows.                      |
 | `artifacts`       | List of saved files: serial log, camera frames, exit codes. |
 
-### 5.3 Job event log
+### 5.4 Job event log
 
 Append-only. One row per state transition or worker-emitted line.
 Powers (a) the long-poll wakeup, (b) the live HTMX log view, (c) audit.
@@ -207,7 +267,7 @@ Powers (a) the long-poll wakeup, (b) the live HTMX log view, (c) audit.
 Long-poll clients pass a `since=<seq>` cursor and block on a
 per-job `asyncio.Condition` until new rows land or the timeout fires.
 
-### 5.4 Auxiliary component
+### 5.5 Auxiliary component
 
 An auxiliary is anything that hangs off a device and that a test might
 need to assert against — a display, a sensor, an LED ring, a logic
@@ -234,7 +294,7 @@ manifest is also the place where physical wiring gets recorded —
 today that knowledge lives implicitly inside the protomq display-v2
 test scripts (see §15 open question 7).
 
-### 5.5 Connectivity matrix (multiplex)
+### 5.6 Connectivity matrix (multiplex)
 
 Most aux-to-device wiring in v1 is **fixed**: aux `X` is bolted to
 device `Y` and only `Y`. But the bench *does* have a real shared
@@ -251,52 +311,77 @@ mux, relay GPIO crossbar) drop into the same model.
 # /etc/hil/topology.yaml  (excerpt — grounded in vendor/hil-detection/references/hardware.md)
 hosts:
   - id: rpi-displays
-    role: dut-controller
+    role: microcontroller-fleet
     addr: 192.168.1.234
+    transport: ssh
+    ssh_user: pi
+    ssh_key_path: /etc/hil/keys/rpi-displays
+    capabilities: [power-control, mcp23017, usbip-server, cameras]
+  - id: rpi-hil001
+    role: sbc-fleet
+    addr: rpi-hil001.local
+    transport: ssh
+    ssh_user: pi
+    ssh_key_path: /etc/hil/keys/rpi-hil-fleet      # shared key, per-host known_hosts pinning
+    capabilities: []                                # power-control coming later
+  # rpi-hil002 .. rpi-hil007 follow the same shape.
   - id: pi5-protomq
     role: protomq-broker
     addr: 192.168.1.210
+    transport: none                                 # read-only observer; no SSH
     mqtt_port: 1884
 
 muxes:
-  - id: usb-hub-01
+  - id: rpi-displays.usb-hub-01
+    host: rpi-displays
     kind: usb-power
     model: genesys-logic-05e3-0610
-    host: rpi-displays
     control:
       adapter: mcp23017-solenoid
       i2c_bus: 1
       i2c_addr: 0x20
-      script: vendor/hil-detection/usb_hub.py
-    exclusive: false              # per-channel independent
+      script: vendor/hil-detection/usb_hub.py       # path on the HIL host after deploy
+    exclusive: false                                # per-channel independent
     timing_profiles:
       standard:   { on: "200ms-H,LOW", off: "200ms-H,500ms-L,1000ms-H,LOW" }
       samd51_uf2: { on: "200ms-H,LOW", off: "200ms-H,100ms-L,300ms-H,LOW" }
+  # Future: rpi-hil001.usb-hub-01 etc. once per-port power control lands.
 
 devices:
   - id: qtpy-s3-01
+    host_id: rpi-displays
     kind: microcontroller
     model: esp32-s3
     capabilities: [native-cdc, spi, i2c]
     usb: { vid: "239a", pid: "8143" }
     serial_port: /dev/serial/by-id/...
-    reset: { mux: usb-hub-01, channel: 0, profile: standard }
+    reset: { mux: rpi-displays.usb-hub-01, channel: 0, profile: standard }
     pool: public
   - id: pyportal-titano-01
+    host_id: rpi-displays
     kind: microcontroller
     model: samd51
     capabilities: [uf2, spi, i2c]
     usb: { vid: "239a", pid: "8053", uf2_vid: "239a", uf2_pid: "0035" }
     flasher: uf2-msc
-    reset: { mux: usb-hub-01, channel: 4, profile: samd51_uf2 }
+    reset: { mux: rpi-displays.usb-hub-01, channel: 4, profile: samd51_uf2 }
     pool: public
   - id: pico-w-01
+    host_id: rpi-displays
     kind: microcontroller
     model: rp2040
     capabilities: [bootsel-msc, spi, i2c]
     flasher: picotool
-    reset: { mux: usb-hub-01, channel: 6, profile: standard }
+    reset: { mux: rpi-displays.usb-hub-01, channel: 6, profile: standard }
     pool: public
+  - id: rpi-hil003-pi5-a
+    host_id: rpi-hil003
+    kind: sbc
+    model: pi5
+    capabilities: [linux, python-snapper]
+    serial_port: /dev/serial/by-id/...              # UART via host
+    reset: null                                     # no power control yet — manual or via systemd reboot over SSH
+    pool: internal
 
 auxes:
   - id: oled128x32-metro-s2
@@ -340,7 +425,7 @@ If no mux exists, jobs that need an aux the assigned device can't
 reach are rejected at submission time with a structured error rather
 than failing mid-flash.
 
-### 5.6 Where the manifest comes from
+### 5.7 Where the manifest comes from
 
 Two existing artefacts seed the first `topology.yaml` — neither is
 authoritative on its own, but together they cover the bench:
@@ -411,14 +496,16 @@ writes. Dashboard at `/`.
 | GET    | `/v1/jobs/{id}/logs?since=`       | required | Same as wait but non-blocking; for tools that prefer polling. |
 | GET    | `/v1/jobs/{id}/artifacts/{name}`  | required | Stream a captured artifact (serial log, frame, etc). |
 | POST   | `/v1/jobs/{id}/cancel`            | required | Best-effort cancel.                      |
-| GET    | `/v1/devices`                     | required | List devices visible to the caller's pool. Supports `?kind=&model=&capability=&aux=&pool=` filters; `?include=aux,connections` to expand. |
-| GET    | `/v1/devices/{id}`                | required | Device detail + current job + attached/reachable aux. |
+| GET    | `/v1/hosts`                       | required | List HIL hosts, with `status`, `last_seen_at`, and the device count owned by each. |
+| GET    | `/v1/hosts/{id}`                  | required | Host detail + devices on it + recent jobs run there. |
+| GET    | `/v1/devices`                     | required | List devices visible to the caller's pool. Supports `?host=&kind=&model=&capability=&aux=&pool=` filters; `?include=aux,connections,host` to expand. |
+| GET    | `/v1/devices/{id}`                | required | Device detail + current job + attached/reachable aux + owning host. |
 | GET    | `/v1/aux`                         | required | List auxiliary components. Same filter/include grammar. |
 | GET    | `/v1/aux/{id}`                    | required | Aux detail + which devices it can be routed to (and via which mux). |
-| GET    | `/v1/topology`                    | required | Full graph: devices, auxes, muxes, connections. Suitable for the dashboard's wiring view and for CI to introspect before submission. |
-| POST   | `/v1/topology/resolve`            | required | Dry-run a job selector → returns matching `(device, aux bindings, mux ops)` candidates and any structured rejection reason. No job is created. |
+| GET    | `/v1/topology`                    | required | Full graph: hosts, devices, auxes, muxes, connections. Suitable for the dashboard's wiring view and for CI to introspect before submission. |
+| POST   | `/v1/topology/resolve`            | required | Dry-run a job selector → returns matching `(host, device, aux bindings, mux ops)` candidates and any structured rejection reason. No job is created. |
 | GET    | `/healthz`, `/readyz`             | none     | Liveness / readiness.                    |
-| GET    | `/`, `/jobs`, `/jobs/{id}`, `/devices`, `/topology` | none (read-only) | HTMX dashboard pages.    |
+| GET    | `/`, `/jobs`, `/jobs/{id}`, `/hosts`, `/devices`, `/topology` | none (read-only) | HTMX dashboard pages. |
 
 ### 7.1 `POST /v1/jobs` body
 
@@ -524,23 +611,67 @@ the auth context, never from the request body.
 ## 9. Scheduler & worker
 
 - One `asyncio` scheduler task. Wakes on (a) new job enqueued,
-  (b) device freed, (c) periodic tick.
+  (b) device freed, (c) host status change, (d) periodic tick.
 - Per-device `asyncio.Lock`. A job in `assigned`+ holds its device's
   lock until terminal.
+- **Routing at assignment**: the resolver picks a `(host, device,
+  aux bindings, mux ops)` tuple. The worker then opens a transport
+  session against `device.host_id` and runs every adapter call
+  through it; nothing about the work itself happens on the
+  controller. Hosts in `offline` or `quarantined` status are filtered
+  out of resolution.
 - Worker per active job (`asyncio.create_task`). Worker drives the
-  state machine, emits events, calls into the device adapter.
-- Concurrency cap = number of devices. No queueing across devices in
-  v1; if you want parallelism, add devices.
+  state machine, emits events, calls into the device adapter (which
+  in turn goes through the host transport).
+- Concurrency cap = number of devices, *not* number of hosts: many
+  jobs can run in parallel on the same host as long as they target
+  different devices. Per-host backpressure (e.g. "don't run more
+  than N concurrent flashes on rpi-displays") is a per-host config
+  knob if the bench needs it later.
 - Graceful shutdown: scheduler stops accepting new starts, in-flight
-  workers get a `cancel()` budget, then process exits. SQLite state is
-  the source of truth; on restart, any non-terminal job is marked
-  `error` with reason `restart` (we do not auto-resume hardware work).
+  workers get a `cancel()` budget which propagates as SSH session
+  close on the HIL host, then process exits. SQLite state is the
+  source of truth; on restart, any non-terminal job is marked
+  `error` with reason `restart` (we do not auto-resume hardware work
+  on a possibly-orphaned remote process).
 
 ## 10. Hardware adapter layer
 
-The point of this layer is that the worker doesn't care whether a
-device is local USB, USB-IP exported, or behind a solenoid hub —
-adapters compose.
+Two cooperating abstractions: a **host transport** that gives the
+worker a way to run commands and stream data on a remote HIL host,
+and **device adapters** that compose host-transport calls into
+device-shaped operations (acquire / reset / flash / serial /
+release). The worker only sees the adapter; the adapter is the only
+thing that knows the transport exists.
+
+### 10.1 Host transport
+
+```python
+class HostTransport(Protocol):
+    async def exec(self, argv: list[str], *, env: dict[str, str] | None = None,
+                   stdin: bytes | None = None) -> ExecResult: ...
+    async def stream(self, argv: list[str]) -> AsyncIterator[bytes]: ...   # stdout
+    async def copy_to(self, local: Path, remote: PurePosixPath) -> None: ...
+    async def copy_from(self, remote: PurePosixPath, local: Path) -> None: ...
+    async def open_serial(self, device_node: str, baud: int) -> AsyncIterator[bytes]: ...
+    async def healthcheck(self) -> bool: ...
+```
+
+V1 default implementation is **SSH** (`asyncssh`), key-based auth,
+known_hosts pinned per HIL host. The transport pools one persistent
+connection per host and multiplexes channels over it so individual
+adapter calls don't pay connection setup latency. Serial streaming
+goes through an SSH channel running `socat OPEN:/dev/serial/by-id/...
+- ` (or equivalent) so the bytestream is line-buffered to the
+controller without temp files.
+
+A future `agent` transport — small Python service running as a
+systemd unit on each HIL host, exposing an HTTPS API the controller
+calls — is sketched as a drop-in alternative once SSH's failure modes
+become painful (process supervision, partial stdout on connection
+drop, sandboxing). See §15 OQ11.
+
+### 10.2 Device adapters
 
 ```python
 class DeviceAdapter(Protocol):
@@ -551,39 +682,45 @@ class DeviceAdapter(Protocol):
     async def release(self) -> None: ...           # detach, power off
 ```
 
-Concrete adapters compose smaller pieces:
+Each adapter holds a `HostTransport` for the device's owning host.
+Concrete adapters compose smaller pieces, *all* of which run on the
+HIL host:
 
 - `UsbIpAttach` — uses `vendor/usbip-autoattach`. That repo is split:
-  the **server side** is a udev rule + `usbip-autobind` helper installed
-  on the host exporting devices (rebinds to `usbip-host` on every
-  re-enumeration, so resets during flashing don't drop the export);
-  the **client side** is a stdlib-only Python reconciliation loop that
-  reads vhci sysfs and reattaches busids when ports go to error or new
-  devices appear. The adapter just supervises the client loop and
-  reports per-busid state up to the worker.
-- `Mcp23017Solenoid` — talks to the MCP23017 at I²C `0x20` on
-  rpi-displays via `vendor/hil-detection/usb_hub.py` (parameterised
-  timings) or `solenoid_hub_control.py` (fixed timings). Channel
-  per-device from the manifest; **timing profile** (`standard`,
-  `samd51_uf2`, …) also from the manifest, because SAMD51 boards need
-  a specific short/long pulse sequence to enter the UF2 bootloader vs
-  the standard off sequence.
-- `Flasher` — pluggable: `esptool` (ESP), `picotool` + 1200-baud CDC
-  sentinel (RP2040 BOOTSEL chain, see `vendor/hil-detection/scripts/
-  pico_hil_flash.sh` for the three-stage strategy already in use),
-  `uf2-msc` (mount the BOOTSEL drive and copy `.uf2`), a
-  Snapper-Python uploader, a Snapper-Arduino sketch upload, or
-  "no-op" for pre-provisioned devices.
-- `SerialCapture` — `pyserial-asyncio`, line-buffered, tee'd to both
-  the event log and an on-disk artifact file. Uses
-  `/dev/serial/by-id/...` because `ttyACM*` numbering is unstable
-  across re-enumeration.
-- `CameraCapture` — optional, captures N frames around interesting
-  events for visual confirmation against the display under test.
+  the **server side** (udev rule + `usbip-autobind` helper) is
+  installed on the HIL host that physically owns the USB device, so
+  the device stays bound to `usbip-host` across resets; the **client
+  side** (stdlib-only Python reconciliation loop) runs on whichever
+  HIL host is consuming the USB-IP-exported device — the controller
+  supervises that loop over SSH.
+- `Mcp23017Solenoid` — invokes `vendor/hil-detection/usb_hub.py` on
+  `rpi-displays` (the only host with a solenoid-controlled hub
+  today). Channel per-device from the manifest; **timing profile**
+  (`standard`, `samd51_uf2`, …) also from the manifest, because
+  SAMD51 boards need a specific short/long pulse sequence to enter
+  the UF2 bootloader vs the standard off sequence. When `rpi-hil00N`
+  gain per-port power control, each grows its own mux record and the
+  same adapter is parameterised by host.
+- `Flasher` — pluggable, all invoked through the host transport so
+  the firmware artifact is copied to the HIL host's `/tmp` first and
+  the flash tool runs *there*: `esptool` (ESP), `picotool` +
+  1200-baud CDC sentinel (RP2040 BOOTSEL chain, see
+  `vendor/hil-detection/scripts/pico_hil_flash.sh` for the three-
+  stage strategy already in use), `uf2-msc` (mount the BOOTSEL drive
+  and copy `.uf2`), a Python-Wippersnapper installer over SSH for
+  SBCs, an Arduino-sketch upload, or "no-op" for pre-provisioned
+  devices.
+- `SerialCapture` — opens a streaming SSH channel against the host's
+  `/dev/serial/by-id/...` (stable ID, because `ttyACM*` numbering is
+  unstable across re-enumeration). Line-buffered, tee'd to both the
+  event log and an on-disk artifact file on the controller.
+- `CameraCapture` — captures frames on the HIL host (where the
+  camera is attached), pulls them back over the transport's
+  `copy_from` for storage in the per-job artifact directory.
 
-Test scripts (section 11) call into the same adapter the worker holds,
-so a script can request an additional reset or a fresh serial window
-mid-test.
+Test scripts (section 11) call into the same adapter the worker
+holds, so a script can request an additional reset or a fresh serial
+window mid-test without knowing the transport details.
 
 ## 11. Test scripts (the "HIL repo")
 
@@ -674,69 +811,117 @@ device up via the device adapter, (b) points it at the ProtoMQ
 broker, (c) tails serial + observes the broker's view of the
 exchange, (d) calls pass/fail based on whether the script reached its
 terminal step. The JSONs feed the topology importer for wiring info
-(§5.6), not the runtime.
+(§5.7), not the runtime.
 
 **`vendor/hil-detection/tests/`** — pytest suites
 (`test_circuitpython.py`, `test_micropython.py`,
 `test_wippersnapper.py`) with a `conftest.py` that already drives the
 bench (SSH to `rpi-displays`, toggle the USB hub, flash via
-`pico_hil_flash.sh`, mount CIRCUITPY, etc). v1 of the controller is
-intended to **replace the SSH pattern by running on rpi-displays
-directly** — the fixtures stay, but `RPI_HOST` / `sshpass` go away and
-the fixtures call into the controller's adapter layer instead. Until
-that port is done, the controller can shell into pytest with markers
-(`pytest -m circuitpython tests/test_circuitpython.py`) and capture
-the report as the job result.
+`pico_hil_flash.sh`, mount CIRCUITPY, etc). **This SSH-from-an-
+orchestrator-into-a-HIL-host pattern is exactly the architecture
+we're formalising** — the controller is the orchestrator, the HIL
+hosts are the targets, and the fixtures are the prototype of what
+the device adapters will do over the host transport. Two concrete
+clean-ups port hil-detection's conftest onto the new layer:
+
+1. Drop the hardcoded `RPI_PASSWORD` / `sshpass` path entirely;
+   switch to the key-based auth the HIL hosts already have set up
+   for the `pi` user.
+2. Pull `RPI_HOST` (and the equivalent for SBC tests) from the
+   controller-injected host context instead of a module constant,
+   so the same fixture can run against any host in the fleet.
+
+The controller's `tests/runner.py` shells into pytest with markers
+(`pytest -m circuitpython tests/test_circuitpython.py`) on the
+target HIL host, captures the report as the job result, and streams
+the live log back through the host transport.
 
 See §15 open question 7 for the manifest ownership choice.
 
 ## 12. Security posture
 
-- Service runs as an unprivileged user (`hil`). udev rules grant that
-  user access to the specific `/dev/serial/by-id/...`, USB-IP control
-  node, and the solenoid-hub HID device. No `sudo`.
-- No `shell=True` anywhere. All subprocess calls use argv lists with
-  explicit binaries.
+**Controller host**
+
+- Service runs as an unprivileged user (`hil`). Holds the
+  per-HIL-host SSH private keys in `/etc/hil/keys/` with mode `0400`,
+  owned by the `hil` user.
+- No `shell=True` anywhere. All subprocess calls (locally and over
+  the host transport) use argv lists with explicit binaries.
 - Artifact fetches are restricted to an allow-list of hosts
   (`api.github.com`, `objects.githubusercontent.com`, …) and require a
-  `sha256` from the caller; mismatch aborts before flashing.
+  `sha256` from the caller; mismatch aborts before any artifact is
+  pushed to a HIL host.
 - Token storage: argon2id hashes only. Plain token shown once.
 - OIDC: verify `aud` against a server-configured value (default
   `hil-controller`), reject tokens older than 10 minutes.
 - Per-pool rate limits on job submission to prevent a runaway CI
   matrix from monopolising hardware.
 - Audit table records every authenticated request (principal, route,
-  job id, decision) with a 30-day retention.
+  job id, **target host**, decision) with a 30-day retention.
+
+**HIL hosts (rpi-displays, rpi-hil00N)**
+
+- `pi` user authenticates with the controller's per-host public key
+  only; password auth disabled, the hardcoded `pi/sjahse98`
+  bench-default password in `vendor/hil-detection/tests/conftest.py`
+  is rotated out as part of the cutover (see §15 OQ8).
+- known_hosts pinning on the controller side so a man-in-the-middle
+  swap can't hijack a HIL session.
+- udev rules grant `pi` access to the specific `/dev/serial/by-id/...`,
+  USB-IP control node, MCP23017 I²C bus, and the
+  solenoid-hub HID device on rpi-displays. No `sudo`.
+- Each HIL host runs a long-lived `usbip-autobind` udev rule + a
+  short-lived per-job pytest/flasher invocation. There is no
+  persistent agent in v1.
 
 ## 13. Deployment
 
-The bench is **two-host**, not one (per
-`vendor/hil-detection/references/hardware.md`):
+Three tiers:
 
-- **rpi-displays** (`192.168.1.234`, Pi Zero 2W) — DUT controller.
-  Owns the Genesys USB hub, the MCP23017 solenoid driver at I²C
-  `0x20`, the `/dev/serial/by-id/...` nodes, and any cameras. **The
-  HIL controller service runs here.**
-- **pi5-protomq** (`192.168.1.210`, Pi 5) — ProtoMQ broker (MQTT
-  `1884`) and its web UI (`5173`). DUTs connect to it as MQTT clients
-  during protomq-flavoured tests. The HIL controller talks to it as a
-  read-only observer of the broker's state.
+1. **Controller host** — an independent Linux box (Pi, NUC, VM,
+   whatever). Requirements: network reachability to every HIL host
+   and to `pi5-protomq`, Python 3.11+, disk for SQLite + job
+   artifacts, ability to bind an HTTPS port. Does **not** have any
+   DUTs attached.
+2. **HIL host fleet** — `rpi-displays` for microcontroller DUTs,
+   `rpi-hil001` … `rpi-hil007` for SBC DUTs. Each runs a `pi` user
+   the controller SSHes into.
+3. **ProtoMQ broker** — `pi5-protomq` (`192.168.1.210`, MQTT `1884`,
+   web UI `5173`). DUTs talk to it as MQTT clients during
+   protomq-flavoured tests. The controller observes the broker but
+   does not host it. Not strictly required for non-protomq tests.
 
-Concretely:
+**Controller host install** (concretely):
 
-- systemd unit on rpi-displays running `uvicorn
-  hil_controller.main:app` bound to `127.0.0.1`. Caddy or nginx in
-  front terminates TLS and serves the dashboard over the LAN.
-- SQLite file in `/var/lib/hil/` with WAL mode. Daily `sqlite3 .backup`
-  to a sibling file; logs and artifacts under `/var/lib/hil/jobs/<id>/`.
-- Devices, pools, and OIDC policy live in `/etc/hil/` as YAML, watched
-  for changes and reloaded without a restart.
-- `vendor/usbip-autoattach/server/` installed on rpi-displays (udev
-  rule + `usbip-autobind` helper, `usbipd -D` running). The
-  controller process invokes the client-side reconciliation loop from
-  the same submodule.
-- Single-binary install isn't a goal; this is a Pi-side service
-  installed via the package + a deploy script.
+- systemd unit running `uvicorn hil_controller.main:app` bound to
+  `127.0.0.1`. Caddy or nginx in front terminates TLS and serves the
+  dashboard over the LAN.
+- SQLite file in `/var/lib/hil/` with WAL mode. Daily
+  `sqlite3 .backup` to a sibling file; logs and artifacts under
+  `/var/lib/hil/jobs/<id>/`.
+- Hosts, devices, pools, and OIDC policy live in `/etc/hil/` as
+  YAML, watched for changes and reloaded without a restart.
+- Per-HIL-host SSH private keys in `/etc/hil/keys/`, mode `0400`,
+  one file per host (or one shared key for the SBC fleet if that's
+  how the bench is set up).
+
+**HIL host prep** (per host, one-off; will be a `deploy/setup-hil-host.sh`
+that the controller pushes via SSH):
+
+- Authorise the controller's public key for the `pi` user.
+- Install `vendor/usbip-autoattach/server/` (udev rule +
+  `usbip-autobind` helper, `usbipd -D` running, `usbip_host` module
+  pinned).
+- On `rpi-displays`: install `vendor/hil-detection/usb_hub.py` and
+  `solenoid_hub_control.py` under `/opt/hil/`, plus the udev rules
+  for the MCP23017 and the stable `/dev/serial/by-id/...` symlinks.
+- On `rpi-hil00N`: same `pi`-user SSH setup; per-port power-control
+  bits land when that hardware does.
+- Install Python (system or virtualenv) sufficient for the pytest
+  suites in `vendor/hil-detection/tests/` to run.
+
+Single-binary install isn't a goal; the controller is installed via
+the Python package + the deploy scripts.
 
 ## 14. Observability
 
@@ -779,15 +964,14 @@ Things worth resolving before implementation, in rough priority order:
    does the protomq team want to keep adding new boards via more
    `scripts/*.json` (and we follow), or should new boards land
    directly in `topology.yaml`?
-8. **Hil-detection SSH pattern.** `vendor/hil-detection/tests/
-   conftest.py` SSHes from a separate Tachyon host into
-   `rpi-displays` with a **hardcoded password** (`RPI_HOST`,
-   `RPI_PASSWORD` constants). When the controller lands on
-   rpi-displays directly the SSH hop goes away, but until then we
-   either (a) move the password into a `.env` / keyring, (b) switch
-   to key-based auth, or (c) accept the risk on the LAN. Flagging
-   because committing it as-is into a shared repo is a problem
-   regardless of which path we take.
+8. **Hardcoded password in hil-detection conftest.** The
+   `RPI_PASSWORD = "sjahse98"` constant in
+   `vendor/hil-detection/tests/conftest.py` was originally a
+   workaround; key-based auth for the `pi` user already exists on
+   every HIL host. The cutover is just (a) PR `hil-detection` to
+   read the controller-supplied host context instead of the
+   hardcoded constants, (b) delete the password from the file. This
+   is no longer architectural — it's a small cleanup PR.
 9. **Channel 3 of the solenoid map** is recorded as `UNCONFIRMED` in
    `hardware.md` — "does not produce unique device on toggle test".
    Worth a bench session to either populate or formally retire that
@@ -799,6 +983,36 @@ Things worth resolving before implementation, in rough priority order:
     `protomq` + `wippersnapper-protobufs`), (c) whether dual-push to
     an Adafruit upstream is desired the way protomq dual-pushes to
     `tyeth/protomq`.
+11. **Host transport: SSH vs. agent.** v1 ships SSH (asyncssh,
+    persistent connection per host, multiplexed channels) because
+    it's zero-install on the HIL hosts beyond the SSH key that's
+    already there. Failure modes that may push us to an HTTP agent
+    later: (a) hung remote processes after a TCP drop (SSH alone
+    can't clean these up without `setsid` + an unhappy reaper),
+    (b) stdout truncation on disconnect mid-flash, (c) wanting to
+    sandbox the per-job pytest invocation under a systemd-run
+    scope. Decision deferred until we hit one of those; the
+    transport interface is shaped so swapping is a single-class
+    change.
+12. **Artifact transfer to HIL hosts.** Two options. (a) Controller
+    fetches the artifact (with sha256 verification), then pushes
+    once to the chosen host's `/tmp/hil/<job-id>/`. (b) Controller
+    hands the URL + sha256 to the host, which fetches it directly.
+    (a) is simpler, keeps egress on one box, and means the host
+    only needs the controller in its allow-list; (b) is faster
+    when the artifact is large and the controller-to-HIL link is
+    slow. Recommend (a) for v1.
+13. **Per-host concurrency caps.** A noisy flash can saturate
+    rpi-displays' USB bus and disturb concurrent jobs on the same
+    hub. v1 starts with no per-host cap (concurrency = number of
+    devices); add a `max_concurrent_jobs` per Host row if we see
+    interference on the bench.
+14. **SBC test execution shape.** SBC DUTs on `rpi-hil00N` don't
+    have a "flash" step in the microcontroller sense — they have a
+    "deploy a Python package + secrets.json + restart the service"
+    step. Confirm whether that's modelled as a flasher
+    (`snapper-python` adapter) or as a distinct deploy phase in the
+    job state machine before §6 ossifies further.
 
 ## 16. Milestones
 
@@ -806,27 +1020,41 @@ A suggested cut, each landable on its own:
 
 - **M0** — repo skeleton, pyproject, FastAPI app, `/healthz`, CI for
   lint + tests, this doc merged.
-- **M1** — domain model, SQLite schema, in-memory scheduler, fake
-  adapter, end-to-end `POST /v1/jobs` → `wait` → `finished` against
-  the fake. HTMX dashboard shows queue.
-- **M1.5** — topology manifest loader + resolver + `/v1/devices`,
-  `/v1/aux`, `/v1/topology`, `/v1/topology/resolve` endpoints. Fixed
-  wiring only; mux modelled in the schema but not yet acted on. Run
-  the protomq display-v2 importer to seed the first manifest.
-- **M2** — auth: per-repo bearer tokens + GitHub OIDC verifier, policy
-  file, audit log.
-- **M3** — real adapters: serial capture, one flasher (esptool), one
-  reset path. Drive a single fixed microcontroller end-to-end.
-  Validate the `examples/hil-call.sh` + `example-hil-call.yml` flow
-  against this end-to-end pipeline.
-- **M4** — USB-IP integration via usbip-auto-attach, solenoid-hub
-  reset, mux adapters, multi-device scheduling with resource locks
-  that respect the connectivity matrix. Add the `uf2-msc` and
-  `picotool` flashers so Wippersnapper-Arduino targets work
-  end-to-end alongside the M3 esptool path.
-- **M5** — ProtoMQ test helpers, camera capture, artifact storage,
-  Prometheus metrics. Land the Python Wippersnapper submodule if/when
-  it's reachable.
+- **M1** — domain model (incl. Host), SQLite schema, in-memory
+  scheduler, fake host transport + fake adapter, end-to-end
+  `POST /v1/jobs` → `wait` → `finished` against the fake. HTMX
+  dashboard shows queue + hosts. No real SSH yet.
+- **M1.5** — topology manifest loader + resolver + `/v1/hosts`,
+  `/v1/devices`, `/v1/aux`, `/v1/topology`, `/v1/topology/resolve`
+  endpoints. Fixed wiring only; mux modelled in the schema but not
+  yet acted on. Run the protomq + hardware-md importers to seed the
+  first manifest with `rpi-displays` and at least one `rpi-hil00N`.
+- **M2** — auth: per-repo bearer tokens + GitHub OIDC verifier,
+  policy file, audit log (incl. target host).
+- **M3** — real **SSH host transport** (`asyncssh`, key auth,
+  known_hosts pinning, connection pool). Smoke test against
+  `rpi-displays` and one `rpi-hil00N`. Per-host health probe.
+- **M3.5** — first real device adapter chain end-to-end against
+  `rpi-displays`: serial capture, esptool flasher, one reset path
+  via the MCP23017. Drive one microcontroller through the full job
+  state machine. Validate `examples/hil-call.sh` +
+  `example-hil-call.yml` against this pipeline.
+- **M4** — USB-IP integration via `usbip-autoattach` (server side
+  deployed to rpi-displays via the new `deploy/setup-hil-host.sh`),
+  solenoid-hub reset, mux adapters, per-device locks respecting the
+  connectivity matrix. Add `uf2-msc` and `picotool` flashers so
+  Wippersnapper-Arduino targets work end-to-end alongside esptool.
+  Port `vendor/hil-detection/tests/conftest.py` to drop the
+  hardcoded password (open question 8).
+- **M4.5** — SBC fan-out: drive one `rpi-hil00N` SBC DUT
+  end-to-end. Snapper-Python deploy adapter, secrets-injection at
+  deploy time per `examples/wippersnapper-python/`. Tightens
+  open question 14 (SBC deploy as flasher vs. distinct phase).
+- **M5** — ProtoMQ test helpers, camera capture (with per-host
+  pull-back over the transport), artifact storage, Prometheus
+  metrics. Land the Python Wippersnapper submodule if/when it's
+  reachable (open question 10).
 
-Past M5 we revisit dynamic hardware switching and GitHub check-run
-posting based on what we've learned.
+Past M5 we revisit dynamic hardware switching, GitHub check-run
+posting, and the SSH → agent transport upgrade (open question 11)
+based on what we've learned.
