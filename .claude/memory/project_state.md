@@ -39,7 +39,18 @@ ProtoMQ observer wired into worker: started as concurrent asyncio Task during ru
 cancelled after test, completed steps emitted. Configured via `params.protomq.{broker_host,
 mqtt_port, api_port, script}`.
 
-**87 tests pass, 0 failures.**
+**134 tests pass, 0 failures.** (as of 2026-05-23, commit b71a2f7)
+
+**HTMX web UI (done 2026-05-23):**
+`/ui/` — Jinja2/HTMX admin interface served from `src/hil_controller/web/`.
+- Login/logout (cookie `hil_token`, same auth as Bearer API)
+- Dashboard with counts + recent jobs
+- Hosts CRUD: add/edit/delete inline
+- Devices CRUD: add/edit/delete, kind filter (microcontroller/sbc)
+- Hardware/Aux CRUD with connection management (which Adafruit product is on which device)
+- Cameras CRUD (aux kind=camera; interface=URL for IP cams)
+- ProtoMQ script browser (set `HIL_SCRIPTS_DIR` to vendor/protomq/scripts/)
+- Static files at /ui/static/app.css; HTMX from CDN unpkg
 
 **Not yet done:**
 - M2 remainder: GitHub OIDC verifier, policy file
@@ -47,7 +58,6 @@ mqtt_port, api_port, script}`.
 - M3.5: MCU adapter chain (serial capture, esptool, MCP23017)
 - M4: USB-IP, solenoid-hub reset, uf2-msc / picotool flashers
 - M5 remainder: camera capture, artifact storage, Prometheus metrics
-- HTMX dashboard
 - topology/importers/ (protomq_scripts.py, hardware_md.py)
 - ProtoMQ protobuf decoding (Python proto definitions not yet compiled)
 - GET /v1/jobs/{id}/logs non-blocking endpoint
