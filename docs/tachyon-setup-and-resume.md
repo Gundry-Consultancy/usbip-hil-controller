@@ -114,26 +114,20 @@ ssh particle@192.168.1.169 "
 
 ## Known Issues / Next Steps
 
-### ProtoMQ port leak (root cause)
+### ProtoMQ port leak — fixes applied
 
-`ProtoMQService.stop()` is `async def` but registered with `atexit.register()`, which cannot await coroutines. The node process is not killed on teardown, so the second test that tries to start ProtoMQ hits `EADDRINUSE: 1884`.
+The following changes were made directly to `Adafruit_Wippersnapper_Python/src/ProtoMQ/service.py` on the Tachyon (not yet upstreamed):
 
-**Fix needed in `Adafruit_Wippersnapper_Python/src/ProtoMQ/service.py`:**
+1. **`_kill_port(port)`** — added defensive method called at the top of `start()` to `fuser -k` any stale process on the MQTT and web ports before launching a new instance. Handles the case where the previous test session's last ProtoMQ wasn't cleaned up.
 
-```python
-# Change async def stop() to sync, or add a sync wrapper:
-def _sync_stop(self):
-    if ALREADY_RUNNING or not hasattr(self, 'protomq_process'):
-        return
-    import os, signal
-    try:
-        os.killpg(self.protomq_process.pid, signal.SIGINT)
-    except ProcessLookupError:
-        pass
+2. **`_stop_sync()`** — added synchronous kill method using SIGKILL (not SIGINT) to the process group, with `process.wait()` + port-free polling. Registered with `atexit` instead of the original `async def stop()`.
 
-# In start():
-atexit.register(self._sync_stop)
-```
+3. **`async def stop()`** — kept async (fixture does `await protomq.stop()`) but now delegates to `_stop_sync()`.
+
+If you need to re-apply these fixes after a `git pull` on the wippersnapper repo, the pattern is:
+- `start()`: call `self._kill_port(MQTT_PORT)` and `self._kill_port(WEB_PORT)` before Popen
+- `atexit.register(self._stop_sync)` not `self.stop`
+- `_stop_sync()`: `os.killpg(pid, SIGKILL)` + `process.wait(5)` + socket poll until free
 
 ### 2 test failures
 
