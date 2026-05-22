@@ -76,3 +76,39 @@ async def test_cleanup_removes_workdir(git_deploy, mock_transport):
     await git_deploy.cleanup()
     calls = [str(c) for c in mock_transport.exec.call_args_list]
     assert any("rm" in c for c in calls)
+
+
+@pytest.mark.asyncio
+async def test_deploy_injects_pat_into_clone_url(mock_transport):
+    adapter = GitDeployAdapter(
+        transport=mock_transport,
+        job_id="job-pat",
+        source={
+            "repo": "https://github.com/adafruit/Wippersnapper_Python.git",
+            "ref": "main",
+            "pat": "ghp_testtoken123",
+        },
+        params={},
+    )
+    await adapter.deploy()
+    all_args = [arg for call in mock_transport.exec.call_args_list for arg in call.args[0]]
+    clone_url = next((a for a in all_args if "github.com" in a), None)
+    assert clone_url is not None
+    assert "ghp_testtoken123@github.com" in clone_url
+
+
+@pytest.mark.asyncio
+async def test_deploy_no_pat_uses_plain_url(mock_transport):
+    adapter = GitDeployAdapter(
+        transport=mock_transport,
+        job_id="job-nopat",
+        source={
+            "repo": "https://github.com/adafruit/Wippersnapper_Python.git",
+            "ref": "main",
+        },
+        params={},
+    )
+    await adapter.deploy()
+    all_args = [arg for call in mock_transport.exec.call_args_list for arg in call.args[0]]
+    clone_url = next((a for a in all_args if "github.com" in a), None)
+    assert clone_url == "https://github.com/adafruit/Wippersnapper_Python.git"

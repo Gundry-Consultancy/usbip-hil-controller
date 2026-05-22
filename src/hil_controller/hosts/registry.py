@@ -108,12 +108,17 @@ class RealHostRegistry(HostRegistry):
 
         host, device = result
 
-        transport = SSHTransport(
-            host=host["addr"],
-            user=host.get("ssh_user", "pi"),
-            key_path=Path(host["ssh_key_path"]) if host.get("ssh_key_path") else None,
-            known_hosts=host.get("known_hosts"),
-        )
+        if host.get("kind") == "local":
+            from hil_controller.hosts.local import LocalTransport
+
+            transport = LocalTransport()
+        else:
+            transport = SSHTransport(
+                host=host["addr"],
+                user=host.get("ssh_user", "pi"),
+                key_path=Path(host["ssh_key_path"]) if host.get("ssh_key_path") else None,
+                known_hosts=host.get("known_hosts"),
+            )
 
         # Record assignment in the DB
         async with get_db(self.db_path) as db:

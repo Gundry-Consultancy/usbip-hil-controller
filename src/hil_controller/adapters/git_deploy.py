@@ -57,6 +57,9 @@ class GitDeployAdapter:
 
     async def deploy(self) -> None:
         repo = self.source["repo"]
+        pat = self.source.get("pat")
+        if pat and repo.startswith("https://"):
+            repo = repo.replace("https://", f"https://{pat}@", 1)
         ref = self.source.get("ref", "main")
         shallow = self.source.get("shallow", True)
         submodules = self.source.get("submodules", False)

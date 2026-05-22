@@ -1,0 +1,29 @@
+{
+  "target": {
+    "device": {"kind": "sbc", "capabilities": ["python-snapper"]},
+    "pool": "wippersnapper-python"
+  },
+  "script": "pytest-suite",
+  "payload": {
+    "kind": "git-source",
+    "source": {
+      "repo": "https://github.com/adafruit/Wippersnapper_Python.git",
+      "ref": "main",
+      "shallow": true,
+      "submodules": false,
+      "setup": ["pip", "install", "-e", ".[test]"],
+      "pat": "__GH_PAT__"
+    }
+  },
+  "params": {
+    "entry": "python",
+    "args": ["-m", "pytest", "-m", "not hardware", "-v", "--tb=short"]
+  },
+  "secrets_profile": "bench-protomq",
+  "timeouts": {
+    "total_s": 600,
+    "deploy_s": 180,
+    "run_s": 300,
+    "flash_s": 120
+  }
+}

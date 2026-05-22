@@ -29,6 +29,12 @@ hosts:
     max_concurrent_jobs: 1
     capabilities: []
 
+  - id: localhost
+    kind: local
+    role: sbc-fleet
+    max_concurrent_jobs: 2
+    capabilities: [linux, python-snapper]
+
   - id: pi5-protomq
     role: protomq-broker
     addr: 192.168.1.210
@@ -48,6 +54,14 @@ devices:
     host_id: rpi-hil003
     kind: sbc
     model: pi5
+    capabilities: [linux, python-snapper]
+    pool: wippersnapper-python
+    status: available
+
+  - id: localhost-runner-a
+    host_id: localhost
+    kind: sbc
+    model: local
     capabilities: [linux, python-snapper]
     pool: wippersnapper-python
     status: available
