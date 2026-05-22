@@ -1380,13 +1380,23 @@ Status key: **[done]** shipped, **[partial]** partially implemented, **[open]** 
   scheduler + EventBus; fake adapter worker driving the full state machine.
   23 unit tests pass (TDD). HTMX dashboard not yet built.
 
-- **M1.5** [open] — topology manifest resolver; `/v1/hosts`, `/v1/devices`,
-  `/v1/aux`, `/v1/topology`, `/v1/topology/resolve` endpoints. `protomq_scripts.py`
-  and `hardware_md.py` importers.
+- **M1.5** [done] — topology seeder (upsert from `topology.yaml` at startup); hosts,
+  devices, auxes, connections, audit_log DB tables; `GET /v1/hosts`, `/v1/hosts/{id}`,
+  `GET /v1/devices` (filters: host/kind/model/capability/pool), `/v1/devices/{id}`,
+  `GET /v1/aux` (filters: kind/capability/pool), `/v1/aux/{id}`,
+  `GET /v1/topology` (full graph), `POST /v1/topology/resolve` (dry-run selector,
+  409 with structured rejection on no match). `protomq_scripts.py` and
+  `hardware_md.py` importers remain [open].
 
-- **M2** [partial] — bearer-token auth implemented: static bootstrap token
-  (`HIL_STATIC_TOKEN` env) and argon2id DB tokens via `scripts/mint-token.py`.
-  GitHub OIDC verifier, policy file, and audit log not yet implemented.
+- **M2** [partial] — bearer-token auth: static bootstrap token (`HIL_STATIC_TOKEN`)
+  + argon2id DB tokens. `require_auth` now returns a `Principal` dataclass carrying
+  `allowed_pools`, `allowed_profiles`, `default_profile`, `capabilities`. Job
+  submission gates on pool (403), profile (403), and `trusted-firmware` capability
+  for the `raw-firmware-smoke` script. `submitted_by`/`repo` stamped from Principal.
+  `audit_log` written on `job.submit`, `job.cancel`, `auth.fail`.
+  `mint-token.py` extended with `--allowed-pools` / `--allowed-profiles` /
+  `--default-profile` / `--capabilities`. token_id uses `token_hex` (no `_`).
+  GitHub OIDC verifier and policy file not yet implemented.
 
 - **M2.5** [open] — secret profiles YAML; `${env:...}` resolver;
   per-job secrets materialisation onto the HIL host; sanitisation pass.

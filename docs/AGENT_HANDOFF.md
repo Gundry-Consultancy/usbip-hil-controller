@@ -5,6 +5,10 @@ Read this **before** asking the user "what is this project?" — most of
 the orientation is already in `docs/ARCHITECTURE.md` and the rest is
 here.
 
+**Session start:** read `.claude/memory/MEMORY.md` and the files it
+indexes for current project state, conventions, and user preferences.
+Memories live in the repo (`.claude/memory/`), not in `~/.claude/`.
+
 ## What this is
 
 A controller that brokers GitHub-CI hardware-in-the-loop test requests
@@ -33,8 +37,13 @@ Done:
 - [x] **M1** — `POST /v1/jobs`, `GET /v1/jobs/{id}`, long-poll
       `GET /v1/jobs/{id}/wait`, cancel; SQLite jobs + events schema;
       asyncio scheduler + EventBus; fake adapter worker. 23 tests.
-- [x] **M2 partial** — bearer auth: `HIL_STATIC_TOKEN` env + argon2id
-      DB tokens. `scripts/mint-token.py` CLI.
+- [x] **M1.5** — hosts/devices/auxes/connections/audit_log DB tables;
+      topology seeder from `topology.yaml`; `GET /v1/hosts`, `/v1/devices`,
+      `/v1/aux`, `/v1/topology`, `POST /v1/topology/resolve`.
+- [x] **M2 partial** — `Principal` dataclass; `require_auth` returns
+      `Principal`; pool/profile/capabilities gating on job submit (403);
+      audit log on submit/cancel/auth-fail; `mint-token.py` extended.
+      OIDC and policy file not yet implemented.
 - [x] **M3** — `SSHTransport` (asyncssh, key auth).
       `RealHostRegistry` loads `topology.yaml` and returns SSH adapters.
 - [x] **M4.5** — `GitDeployAdapter` (clone → setup → run → cleanup).
@@ -44,10 +53,7 @@ Done:
 
 Not done:
 
-- [ ] **M1.5** — `/v1/hosts`, `/v1/devices`, `/v1/aux`, `/v1/topology`
-      endpoints; `protomq_scripts.py` and `hardware_md.py` importers.
-- [ ] **M2 remainder** — GitHub OIDC verifier, policy file,
-      `allow_profiles` / `capabilities` gating, audit log.
+- [ ] **M2 remainder** — GitHub OIDC verifier, policy file.
 - [ ] **M2.5** — secret profiles YAML; per-job secrets materialisation
       onto HIL host; artifact sanitisation.
 - [ ] **M3.5** — MCU adapter chain (serial capture, esptool, MCP23017).
