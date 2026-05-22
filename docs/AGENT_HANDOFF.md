@@ -66,13 +66,19 @@ Done:
       with `params.protomq` block.
 - [x] `scripts/submit-wipper-test.sh` — GH PAT + ref substitution via jq,
       calls `hil-call.sh`.
-- [x] 87 tests pass.
+- [x] **M2.5 partial** — `JobRequest.secrets` (flat `dict[str, str]`);
+      `GitDeployAdapter` materialises as env vars / `secrets.json` / `.env`
+      per `params.secrets_format`; `JobWorker` purges values to `"***"` in
+      DB on `finally` (no plaintext at rest).
+- [x] 95 tests pass.
 
 Not done:
 
 - [ ] **M2 remainder** — GitHub OIDC verifier, policy file.
-- [ ] **M2.5** — secret profiles YAML; per-job secrets materialisation
-      onto HIL host; artifact sanitisation. Blocking full-bench Python runs.
+- [ ] **M2.5 remainder** — named secret profiles YAML (`bench-protomq` /
+      `live-io-test` / `live-io-prod`); `${env:...}` server-side resolver;
+      nested secrets.json values. Core materialisation (flat secrets, purge,
+      env/json/dotenv formats) is done — see Done list.
 - [ ] **M3.5** — MCU adapter chain (serial capture, esptool, MCP23017).
 - [ ] **M4** — USB-IP, solenoid-hub reset, uf2-msc / picotool flashers,
       hardcoded-password cleanup (OQ8).

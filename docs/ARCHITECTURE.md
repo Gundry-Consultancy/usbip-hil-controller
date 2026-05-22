@@ -1406,8 +1406,15 @@ Status key: **[done]** shipped, **[partial]** partially implemented, **[open]** 
   `--default-profile` / `--capabilities`. token_id uses `token_hex` (no `_`).
   GitHub OIDC verifier and policy file not yet implemented.
 
-- **M2.5** [open] — secret profiles YAML; `${env:...}` resolver;
-  per-job secrets materialisation onto the HIL host; sanitisation pass.
+- **M2.5** [partial] — per-job secrets materialisation shipped. `JobRequest.secrets`
+  accepts a flat `dict[str, str]`; `GitDeployAdapter` materialises them as env vars
+  (`"env"`, default), `secrets.json` (`"json"`), or `.env` (`"dotenv"`) based on
+  `params.secrets_format` — formats can be combined with `+`. `JobWorker` redacts
+  all values to `"***"` in the DB the moment its `finally` block runs (before the
+  terminal-state event), so no plaintext secrets persist at rest.
+  Still open: named secret profiles YAML (`bench-protomq` / `live-io-test` /
+  `live-io-prod` bundles); `${env:...}` server-side resolver; nested secrets.json
+  values (WiFi credentials etc.).
 
 - **M3** [done] — `SSHTransport` (`asyncssh`, key auth, per-call connections).
   `RealHostRegistry` loads `topology.yaml` and returns SSH-backed adapters.
