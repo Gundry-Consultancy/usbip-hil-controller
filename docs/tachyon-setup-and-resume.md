@@ -129,9 +129,27 @@ If you need to re-apply these fixes after a `git pull` on the wippersnapper repo
 - `atexit.register(self._stop_sync)` not `self.stop`
 - `_stop_sync()`: `os.killpg(pid, SIGKILL)` + `process.wait(5)` + socket poll until free
 
+### `BLINKA_OS_AGNOSTIC=1` required in `.env`
+
+Without this, `board.SDA` on the Tachyon returns a raw tuple `(4, 8)` instead of a Blinka Pin object. `I2CBus.configure_bus()` then crashes with `AttributeError: 'tuple' object has no attribute 'direction'`. This exception is stored in the asyncio Task for `client.run()`, but the `checked_in` Future is never set — so `await ws_client.checked_in` hangs forever in every test.
+
+The `.env` must have:
+```
+BLINKA_OS_AGNOSTIC=1
+```
+
+### ProtoMQ web build required before first test run
+
+`tools/protomq/main.js` exits early if `dist/index.html` is missing. Run once after any fresh clone or repo update:
+
+```bash
+cd ~/dev-projects/python/Adafruit_Wippersnapper_Python/tools/protomq
+npm run build-web
+```
+
 ### 2 test failures
 
-Not yet diagnosed — need to run with `--tb=long` after the port-leak is fixed.
+Not yet diagnosed — need to run with `--tb=long` after the above fixes are confirmed.
 
 ### HIL controller token
 
