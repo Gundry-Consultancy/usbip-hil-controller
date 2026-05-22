@@ -14,11 +14,28 @@ _SCHEMA = Path(__file__).parent / "schema.sql"
 
 
 async def init_db(db_path: str) -> None:
-    """Create tables if they don't exist."""
+    """Create tables and apply additive migrations."""
     async with aiosqlite.connect(db_path) as db:
         sql = _SCHEMA.read_text()
         await db.executescript(sql)
         await db.commit()
+        await _migrate(db)
+
+
+async def _migrate(db: aiosqlite.Connection) -> None:
+    """Add columns introduced after the initial schema, safe to re-run."""
+    token_cols = [
+        ("allowed_pools", "TEXT NOT NULL DEFAULT '[]'"),
+        ("allowed_profiles", "TEXT NOT NULL DEFAULT '[]'"),
+        ("default_profile", "TEXT NOT NULL DEFAULT 'bench-protomq'"),
+        ("capabilities", "TEXT NOT NULL DEFAULT '[]'"),
+    ]
+    for col, defn in token_cols:
+        try:
+            await db.execute(f"ALTER TABLE tokens ADD COLUMN {col} {defn}")
+            await db.commit()
+        except Exception:
+            pass  # column already exists
 
 
 @asynccontextmanager
@@ -150,3 +167,19 @@ async def get_events_since(
             {"seq": r["seq"], "at": r["at"], "kind": r["kind"], "payload": json.loads(r["payload_json"])}
             for r in rows
         ]
+
+
+async def audit_event(
+    db: aiosqlite.Connection,
+    event: str,
+    *,
+    subject: str = "",
+    repo: str = "",
+    entity_id: str = "",
+    detail: dict[str, Any] | None = None,
+) -> None:
+    await db.execute(
+        "INSERT INTO audit_log (at, event, subject, repo, entity_id, detail_json) VALUES (?, ?, ?, ?, ?, ?)",
+        (now_iso(), event, subject, repo, entity_id, json.dumps(detail or {})),
+    )
+    await db.commit()

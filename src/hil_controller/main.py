@@ -11,19 +11,22 @@ from fastapi import FastAPI
 log = logging.getLogger(__name__)
 
 
-def create_app(db_path: str | None = None) -> FastAPI:
+def create_app(db_path: str | None = None, topology_file: str | None = None) -> FastAPI:
     from hil_controller.config import get_settings
 
     settings = get_settings()
     _db_path = db_path or settings.db_path
+    _topology_file = topology_file if topology_file is not None else settings.topology_file
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         from hil_controller.db.connection import init_db
         from hil_controller.queue.events import EventBus
         from hil_controller.queue.scheduler import Scheduler
+        from hil_controller.topology.seeder import seed_topology
 
         await init_db(_db_path)
+        await seed_topology(_db_path, _topology_file)
 
         event_bus = EventBus()
         scheduler = Scheduler(db_path=_db_path, event_bus=event_bus)
@@ -45,11 +48,19 @@ def create_app(db_path: str | None = None) -> FastAPI:
         lifespan=lifespan,
     )
 
+    from hil_controller.api.aux import router as aux_router
+    from hil_controller.api.devices import router as devices_router
     from hil_controller.api.health import router as health_router
+    from hil_controller.api.hosts import router as hosts_router
     from hil_controller.api.jobs import router as jobs_router
+    from hil_controller.api.topology import router as topology_router
 
     app.include_router(health_router)
     app.include_router(jobs_router)
+    app.include_router(hosts_router)
+    app.include_router(devices_router)
+    app.include_router(aux_router)
+    app.include_router(topology_router)
 
     return app
 

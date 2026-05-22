@@ -11,9 +11,11 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 
+from hil_controller.auth.principal import Principal
 from hil_controller.auth.tokens import require_auth
 from hil_controller.db.connection import (
     append_event,
+    audit_event,
     get_db,
     get_events_since,
     get_job,
@@ -24,7 +26,10 @@ from hil_controller.db.connection import (
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/v1/jobs", tags=["jobs"])
 
-Auth = Annotated[str, Depends(require_auth)]
+Auth = Annotated[Principal, Depends(require_auth)]
+
+# Scripts that require the 'trusted-firmware' capability
+_TRUSTED_SCRIPTS: frozenset[str] = frozenset({"raw-firmware-smoke"})
 
 
 # --------------------------------------------------------------------------- #
@@ -122,6 +127,25 @@ class WaitResponse(BaseModel):
 
 @router.post("", status_code=status.HTTP_202_ACCEPTED, response_model=JobSubmitResponse)
 async def submit_job(request: Request, body: JobRequest, _auth: Auth) -> JobSubmitResponse:
+    if not _auth.allows_pool(body.target.pool):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Pool '{body.target.pool}' not allowed for this token",
+        )
+
+    profile = body.secrets_profile or _auth.default_profile
+    if not _auth.allows_profile(profile):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Profile '{profile}' not allowed for this token",
+        )
+
+    if body.script in _TRUSTED_SCRIPTS and not _auth.has_capability("trusted-firmware"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Script '{body.script}' requires trusted-firmware capability",
+        )
+
     job_id = str(uuid.uuid4())
     db_path: str = request.app.state.db_path
     scheduler = request.app.state.scheduler
@@ -131,12 +155,20 @@ async def submit_job(request: Request, body: JobRequest, _auth: Auth) -> JobSubm
             db,
             job_id=job_id,
             request_json=body.model_dump(),
-            secrets_profile=body.secrets_profile,
+            secrets_profile=profile,
             exclusive_host=body.exclusive.host,
-            submitted_by=_auth,
-            repo=body.metadata.get("repo", ""),
+            submitted_by=_auth.subject,
+            repo=_auth.repo,
         )
         await append_event(db, job_id, "state", {"state": "queued"})
+        await audit_event(
+            db,
+            "job.submit",
+            subject=_auth.subject,
+            repo=_auth.repo,
+            entity_id=job_id,
+            detail={"pool": body.target.pool, "script": body.script, "profile": profile},
+        )
 
     base = str(request.base_url).rstrip("/")
     await scheduler.enqueue(job_id)
@@ -218,6 +250,13 @@ async def cancel_job(request: Request, job_id: str, _auth: Auth) -> dict[str, st
     async with get_db(db_path) as db:
         await update_job_state(db, job_id, "cancelled", result="cancelled")
         await append_event(db, job_id, "state", {"state": "cancelled"})
+        await audit_event(
+            db,
+            "job.cancel",
+            subject=_auth.subject,
+            repo=_auth.repo,
+            entity_id=job_id,
+        )
 
     event_bus = request.app.state.event_bus
     await event_bus.publish(job_id, {"kind": "state", "payload": {"state": "cancelled"}})
