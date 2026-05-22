@@ -235,3 +235,85 @@ async def test_worker_skips_protomq_when_no_script_configured(event_bus):
         )
         await worker.run()
         MockCls.assert_not_called()
+
+
+# --------------------------------------------------------------------------- #
+# Secrets purge                                                                 #
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.asyncio
+async def test_worker_purges_secrets_from_db_after_finish(tmp_path, event_bus):
+    """request_json.secrets values are redacted in the DB once the worker finishes."""
+    import json
+
+    from hil_controller.db.connection import get_db, get_job, init_db, insert_job
+
+    db_file = str(tmp_path / "purge.db")
+    await init_db(db_file)
+
+    job_id = "purge-test-1"
+    async with get_db(db_file) as db:
+        await insert_job(
+            db,
+            job_id=job_id,
+            request_json={
+                "secrets": {"IO_KEY": "supersecret", "IO_USERNAME": "testuser"},
+                "params": {},
+                "payload": {},
+            },
+            secrets_profile="bench-protomq",
+            exclusive_host=False,
+        )
+
+    worker = JobWorker(
+        job_id=job_id,
+        adapter=_RunAdapter(stdout="1 passed"),
+        event_bus=event_bus,
+        script="pytest-suite",
+        params={},
+        payload={},
+        timeouts={"total_s": 30},
+        db_path=db_file,
+    )
+    await worker.run()
+
+    async with get_db(db_file) as db:
+        row = await get_job(db, job_id)
+    req = json.loads(row["request_json"])
+    assert req["secrets"]["IO_KEY"] == "***"
+    assert req["secrets"]["IO_USERNAME"] == "***"
+
+
+@pytest.mark.asyncio
+async def test_worker_purge_no_op_when_no_secrets(tmp_path, event_bus):
+    """Worker does not crash when request_json has no secrets field."""
+    import json
+
+    from hil_controller.db.connection import get_db, get_job, init_db, insert_job
+
+    db_file = str(tmp_path / "purge2.db")
+    await init_db(db_file)
+
+    job_id = "purge-test-2"
+    async with get_db(db_file) as db:
+        await insert_job(
+            db,
+            job_id=job_id,
+            request_json={"params": {}, "payload": {}},
+            secrets_profile="bench-protomq",
+            exclusive_host=False,
+        )
+
+    worker = JobWorker(
+        job_id=job_id,
+        adapter=_RunAdapter(),
+        event_bus=event_bus,
+        script="pytest-suite",
+        params={},
+        payload={},
+        timeouts={"total_s": 30},
+        db_path=db_file,
+    )
+    result = await worker.run()
+    assert result.state == "finished"

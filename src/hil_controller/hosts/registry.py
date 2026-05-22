@@ -133,10 +133,14 @@ class RealHostRegistry(HostRegistry):
         payload = request.get("payload", {})
         params = request.get("params", {})
         source = payload.get("source", {})
+        secrets = request.get("secrets", {})
+        secrets_format = params.get("secrets_format", "env")
 
         return GitDeployAdapter(
             transport=transport,
             job_id=job_id,
             source=source,
             params=params,
+            secrets=secrets,
+            secrets_format=secrets_format,
         )

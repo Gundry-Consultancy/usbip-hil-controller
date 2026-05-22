@@ -110,6 +110,7 @@ class JobWorker:
                     await _observe_task
                 except (asyncio.CancelledError, Exception):
                     pass
+            await self._purge_job_secrets()
             try:
                 await self.adapter.release()
             except Exception:
@@ -170,6 +171,29 @@ class JobWorker:
 
         self._protomq_observer = obs
         return asyncio.create_task(obs.observe(self._emit), name=f"protomq-{self.job_id}")
+
+    async def _purge_job_secrets(self) -> None:
+        """Redact secrets values from request_json in DB — values replaced with '***'."""
+        if not self.db_path:
+            return
+        try:
+            import json
+
+            from hil_controller.db.connection import get_db, get_job
+
+            async with get_db(self.db_path) as db:
+                row = await get_job(db, self.job_id)
+                if row:
+                    req = json.loads(row["request_json"])
+                    if req.get("secrets"):
+                        req["secrets"] = {k: "***" for k in req["secrets"]}
+                        await db.execute(
+                            "UPDATE jobs SET request_json = ? WHERE id = ?",
+                            (json.dumps(req), self.job_id),
+                        )
+                        await db.commit()
+        except Exception:
+            pass
 
     async def _emit_protomq_status(self) -> None:
         obs = self._protomq_observer

@@ -1,12 +1,16 @@
-"""GitDeploy adapter: clone → setup → run on SBC via SSH transport."""
+"""GitDeploy adapter: clone → setup → materialise secrets → run on SBC via SSH transport."""
 
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import PurePosixPath
 from typing import Any
 
 log = logging.getLogger(__name__)
+
+# Supported format tokens (may be combined with '+', e.g. "json+env")
+_FORMATS = frozenset({"env", "json", "dotenv"})
 
 
 class GitDeployAdapter:
@@ -14,10 +18,22 @@ class GitDeployAdapter:
 
     The adapter is responsible for:
       1. acquire()  — no-op for SBC (no hardware reset needed)
-      2. deploy()   — git clone + optional setup command
+      2. deploy()   — git clone + optional setup + secrets materialisation
       3. run()      — invoke entry point, return 'pass'/'fail'
-      4. cleanup()  — rm -rf the work dir and secrets file
+      4. cleanup()  — rm -rf the work dir
       5. release()  — no-op
+
+    Secrets:
+      Pass ``secrets`` as a flat ``{key: value}`` dict.  ``secrets_format``
+      controls how they reach the test process:
+
+      * ``"env"``    — injected as subprocess env vars only (nothing on disk)
+      * ``"json"``   — written as ``secrets.json`` in the work dir
+      * ``"dotenv"`` — written as ``.env`` in the work dir
+      * Combine with ``+``, e.g. ``"json+env"``
+
+      Default is ``"env"``.  After the job is done the worker purges the
+      values from the DB; the adapter never stores them beyond process memory.
     """
 
     def __init__(
@@ -28,6 +44,8 @@ class GitDeployAdapter:
         params: dict[str, Any],
         work_dir: PurePosixPath | None = None,
         secrets_dest: PurePosixPath | None = None,
+        secrets: dict[str, str] | None = None,
+        secrets_format: str = "env",
     ) -> None:
         self.transport = transport
         self.job_id = job_id
@@ -35,6 +53,8 @@ class GitDeployAdapter:
         self.params = params
         self.work_dir = work_dir or PurePosixPath(f"/tmp/hil/{job_id}")
         self.secrets_dest = secrets_dest
+        self._secrets: dict[str, str] = dict(secrets or {})
+        self._secrets_format: str = secrets_format
         self._deploy_stdout: str = ""
         self._deploy_stderr: str = ""
         self._run_stdout: str = ""
@@ -95,12 +115,26 @@ class GitDeployAdapter:
             if result.exit_status != 0:
                 log.warning("setup command exited %d: %s", result.exit_status, result.stderr)
 
+        # materialise secrets files
+        if self._secrets:
+            fmts = {t.strip() for t in self._secrets_format.split("+")}
+            if "json" in fmts:
+                await self._write_secrets_json()
+            if "dotenv" in fmts:
+                await self._write_secrets_dotenv()
+
     async def run(self) -> str:
         entry = self.params.get("entry", "python")
         args = self.params.get("args", [])
         argv = [entry] + list(args)
 
-        result = await self.transport.exec(argv, cwd=str(self.work_dir))
+        env: dict[str, str] | None = None
+        if self._secrets:
+            fmts = {t.strip() for t in self._secrets_format.split("+")}
+            if "env" in fmts:
+                env = dict(self._secrets)
+
+        result = await self.transport.exec(argv, cwd=str(self.work_dir), env=env)
         self._run_stdout = result.stdout
         self._run_stderr = result.stderr
         log.info("test exit %d", result.exit_status)
@@ -110,3 +144,19 @@ class GitDeployAdapter:
         await self.transport.exec(["rm", "-rf", str(self.work_dir)])
         if self.secrets_dest:
             await self.transport.exec(["rm", "-f", str(self.secrets_dest)])
+
+    # ---------------------------------------------------------------------- #
+    # Secrets materialisation helpers                                          #
+    # ---------------------------------------------------------------------- #
+
+    async def _write_secrets_json(self) -> None:
+        dest = str(self.work_dir / "secrets.json")
+        payload = json.dumps(self._secrets, indent=2).encode()
+        await self.transport.exec(["tee", dest], stdin=payload)
+        log.debug("wrote secrets.json to %s", dest)
+
+    async def _write_secrets_dotenv(self) -> None:
+        dest = str(self.work_dir / ".env")
+        lines = "\n".join(f"{k}={v}" for k, v in self._secrets.items()) + "\n"
+        await self.transport.exec(["tee", dest], stdin=lines.encode())
+        log.debug("wrote .env to %s", dest)

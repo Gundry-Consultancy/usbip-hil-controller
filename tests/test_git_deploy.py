@@ -79,6 +79,98 @@ async def test_cleanup_removes_workdir(git_deploy, mock_transport):
 
 
 @pytest.mark.asyncio
+async def test_deploy_writes_secrets_json_when_format_is_json(mock_transport):
+    adapter = GitDeployAdapter(
+        transport=mock_transport,
+        job_id="job-secrets-json",
+        source={"repo": "https://github.com/adafruit/Wippersnapper_Python.git", "ref": "main"},
+        params={},
+        secrets={"io_username": "testuser", "io_key": "abc123"},
+        secrets_format="json",
+    )
+    await adapter.deploy()
+    calls = [str(c) for c in mock_transport.exec.call_args_list]
+    assert any("tee" in c and "secrets.json" in c for c in calls)
+
+
+@pytest.mark.asyncio
+async def test_deploy_writes_dotenv_when_format_is_dotenv(mock_transport):
+    adapter = GitDeployAdapter(
+        transport=mock_transport,
+        job_id="job-secrets-dotenv",
+        source={"repo": "https://github.com/adafruit/Wippersnapper_Python.git", "ref": "main"},
+        params={},
+        secrets={"IO_KEY": "abc123"},
+        secrets_format="dotenv",
+    )
+    await adapter.deploy()
+    calls = [str(c) for c in mock_transport.exec.call_args_list]
+    assert any("tee" in c and ".env" in c for c in calls)
+
+
+@pytest.mark.asyncio
+async def test_deploy_writes_both_when_format_is_json_plus_env(mock_transport):
+    adapter = GitDeployAdapter(
+        transport=mock_transport,
+        job_id="job-secrets-both",
+        source={"repo": "https://github.com/adafruit/Wippersnapper_Python.git", "ref": "main"},
+        params={},
+        secrets={"IO_KEY": "abc123"},
+        secrets_format="json+env",
+    )
+    await adapter.deploy()
+    calls = [str(c) for c in mock_transport.exec.call_args_list]
+    assert any("secrets.json" in c for c in calls)
+    # no dotenv written for json+env
+    assert not any('".env"' in c or "'.env'" in c for c in calls)
+
+
+@pytest.mark.asyncio
+async def test_deploy_no_file_written_when_no_secrets(mock_transport):
+    adapter = GitDeployAdapter(
+        transport=mock_transport,
+        job_id="job-no-secrets",
+        source={"repo": "https://github.com/adafruit/Wippersnapper_Python.git", "ref": "main"},
+        params={},
+    )
+    await adapter.deploy()
+    calls = [str(c) for c in mock_transport.exec.call_args_list]
+    assert not any("tee" in c for c in calls)
+
+
+@pytest.mark.asyncio
+async def test_run_passes_secrets_as_env_when_format_is_env(mock_transport):
+    adapter = GitDeployAdapter(
+        transport=mock_transport,
+        job_id="job-run-env",
+        source={"repo": "https://github.com/adafruit/Wippersnapper_Python.git", "ref": "main"},
+        params={"entry": "python", "args": ["-m", "pytest"]},
+        secrets={"MY_TOKEN": "secret_val"},
+        secrets_format="env",
+    )
+    mock_transport.exec.return_value = make_exec_result(0, stdout="1 passed")
+    await adapter.run()
+    _, kwargs = mock_transport.exec.call_args
+    assert kwargs.get("env", {}).get("MY_TOKEN") == "secret_val"
+
+
+@pytest.mark.asyncio
+async def test_run_no_env_when_format_is_json_only(mock_transport):
+    adapter = GitDeployAdapter(
+        transport=mock_transport,
+        job_id="job-run-json-only",
+        source={"repo": "https://github.com/adafruit/Wippersnapper_Python.git", "ref": "main"},
+        params={"entry": "python", "args": ["-m", "pytest"]},
+        secrets={"MY_TOKEN": "secret_val"},
+        secrets_format="json",
+    )
+    mock_transport.exec.return_value = make_exec_result(0, stdout="1 passed")
+    await adapter.run()
+    _, kwargs = mock_transport.exec.call_args
+    assert kwargs.get("env") is None
+
+
+@pytest.mark.asyncio
 async def test_deploy_injects_pat_into_clone_url(mock_transport):
     adapter = GitDeployAdapter(
         transport=mock_transport,

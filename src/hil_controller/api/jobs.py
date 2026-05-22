@@ -90,6 +90,7 @@ class JobRequest(BaseModel):
     params: dict[str, Any] = Field(default_factory=dict)
     payload: Payload | None = None
     secrets_profile: str = "bench-protomq"
+    secrets: dict[str, str] = Field(default_factory=dict)
     exclusive: ExclusiveFlag = Field(default_factory=ExclusiveFlag)
     timeouts: Timeouts = Field(default_factory=Timeouts)
     metadata: dict[str, Any] = Field(default_factory=dict)
