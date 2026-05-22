@@ -44,10 +44,19 @@ def create_app(db_path: str | None = None, topology_file: str | None = None) -> 
         app.state.event_bus = event_bus
         app.state.scheduler = scheduler
 
+        if settings.upnp_enabled:
+            from hil_controller.upnp import open_port
+
+            await open_port(settings.port, settings.port, settings.upnp_lease_seconds)
+
         log.info("hil-controller started, db=%s", _db_path)
         yield
 
         await scheduler.stop()
+        if settings.upnp_enabled:
+            from hil_controller.upnp import close_port
+
+            await close_port(settings.port)
         log.info("hil-controller stopped")
 
     app = FastAPI(

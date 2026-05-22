@@ -18,6 +18,9 @@ class Settings(BaseSettings):
     long_poll_max_timeout: int = 600
     long_poll_default_timeout: int = 300
 
+    upnp_enabled: bool = False
+    upnp_lease_seconds: int = 3600
+
 
 _settings: Settings | None = None
 
