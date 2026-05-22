@@ -130,8 +130,8 @@ class RealHostRegistry(HostRegistry):
                 assigned_device=device["id"],
             )
 
-        payload = request.get("payload", {})
-        params = request.get("params", {})
+        payload = request.get("payload") or {}
+        params = request.get("params") or {}
         source = payload.get("source", {})
         secrets = request.get("secrets", {})
         secrets_format = params.get("secrets_format", "env")
