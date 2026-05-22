@@ -13,6 +13,8 @@ metadata:
 - Memories live in the repo at `.claude/memory/`, not in `~/.claude/`. Read `.claude/memory/MEMORY.md` at session start.
 - Update `docs/ARCHITECTURE.md` milestone statuses and `docs/AGENT_HANDOFF.md` checklist whenever milestones complete — not just the local memory files.
 
-**Why:** User confirmed memories-in-repo preference 2026-05-22.
+- Always push to origin after committing — no need to ask.
 
-**How to apply:** Follow unconditionally. After any milestone: update both docs and `.claude/memory/project_state.md`.
+**Why:** User confirmed memories-in-repo preference and always-push rule 2026-05-22.
+
+**How to apply:** Follow unconditionally. After any milestone: update docs, update `.claude/memory/project_state.md`, commit, push.
