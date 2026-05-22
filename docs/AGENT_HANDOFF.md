@@ -140,9 +140,11 @@ clarification:
   `~/dev-projects/python/usbip-hil-controller` under WSL for now.
 - **`rpi-displays`** (`192.168.1.234`, Pi Zero 2W) — owns *all*
   microcontroller DUTs via the Genesys USB hub (`05e3:0610`) with
-  MCP23017 solenoid power/reset at I²C `0x20`. Can run many
-  concurrent jobs (per-device locks); `exclusive.host: true`
-  serialises everything on it.
+  MCP23017 solenoid power/reset at I²C `0x20`. All eight solenoid
+  channels are now considered operational (OQ9 directive: "assume
+  all solenoid channels are working"). Can run many concurrent
+  jobs (per-device locks); `exclusive.host: true` serialises
+  everything on it.
 - **`rpi-hil001` … `rpi-hil007`** — each owns SBC DUTs. **One test
   or suite at a time per host** (`max_concurrent_jobs: 1` in §5.1).
   Per-port power control planned, not yet wired.
@@ -155,8 +157,10 @@ clarification:
 
 ## Where to look first
 
-- **`docs/ARCHITECTURE.md`** — full design. §15 lists 16 open
-  questions; §16 has the milestone cut.
+- **`docs/ARCHITECTURE.md`** — full design. **§15 is now "Design
+  decisions (formerly open questions)"** with all sixteen items
+  resolved by stakeholder directive (verbatim quotes preserved).
+  §16 has the milestone cut.
 - **`vendor/hil-detection/references/hardware.md`** — the
   hand-maintained topology + solenoid map + USB mode tables. Direct
   input to the planned `hardware_md.py` importer.
@@ -175,13 +179,50 @@ clarification:
   reusable workflow. Default tests filter is `-m eink_large`;
   default controller URL is `http://wan.gdenu.fi:8080`.
 
-## Open ask from the user
+## Open asks from the user
 
-`scripts/mint-token.py` is now implemented (M2 partial). It accepts
-`--db`, `--label`, `--pool`, `--repo`, writes an argon2id hash row,
-and prints the plain `hil_<id>_<secret>` token once.
+`scripts/mint-token.py` is implemented (M2 partial). It accepts
+`--db`, `--label`, `--pool`, `--repo`, writes an argon2id hash
+row, and prints the plain `hil_<id>_<secret>` token once.
 
 Default controller URL confirmed: `http://wan.gdenu.fi:8080`.
+
+All sixteen original open questions are now resolved. See §15 of
+`docs/ARCHITECTURE.md` for the verbatim stakeholder directives.
+The resolutions added the following **new implementation tasks**
+that the previous M0–M4.5 work did not yet cover:
+
+- **OQ2 / OQ5 (camera pipeline).** Replace the per-host
+  `copy_from` sketch with a central streaming pipeline. Aux
+  records gain a `roi`; job event log records
+  `(start_ts, end_ts, roi)`; pre-roll + trailing-buffer duty
+  cycle.
+- **OQ4 (force recover).** Add `POST /v1/devices/{id}/recover`
+  and `POST /v1/hosts/{id}/recover`, admin-gated. Cancels
+  in-flight, clears locks, clean detach + power cycle, re-probe.
+- **OQ7 (drift detectors).** `protomq_scripts.py` and
+  `hardware_md.py` importers under
+  `src/hil_controller/topology/importers/` — flag-only, never
+  overwrite `/etc/hil/topology.yaml`.
+- **OQ11 (HTTP agent transport).** Add `src/hil_controller/
+  hosts/agent.py` as the *preferred* transport — HTTPS, mTLS or
+  controller-signed token. SSH stays as fallback. Per-host
+  config picks. The Protocol in `hosts/base.py` already supports
+  this; just add the implementation.
+- **OQ12 (artifact transfer fallback).** Per-host
+  `fetch_locally: bool` config. Default `false` keeps controller-
+  pulls-then-pushes; opt-in lets specific hosts fetch directly.
+- **OQ15 (forensic snapshots + retention daemon).** Snapshot
+  every permissive-script payload to
+  `/var/lib/hil/forensic/<job-id>/`. Background sweep deletes
+  on the *earlier* of 30 days OR `/var/lib/hil` > 75% capacity.
+
+These are not on the "do not re-litigate" list — they're now
+concrete work items. Order of priority (stakeholder hasn't
+sequenced these yet, so this is a suggestion): OQ11 first
+(unblocks restricted-network HIL hosts), OQ4 next (operational
+necessity once real DUTs land), then OQ2/OQ5 (M5 territory),
+then OQ7 and OQ15.
 
 ## Decisions already made — don't re-litigate
 
@@ -193,8 +234,10 @@ again unless the user asks:
 - **Auth**: per-repo bearer tokens **and** GitHub Actions OIDC.
   Both, not either-or.
 - **Controller location**: independent host, not on the bench.
-- **Host transport**: SSH (asyncssh) for v1. Agent transport is
-  open question 11, deliberately deferred.
+- **Host transport**: dual SSH + HTTP-agent. SSH already
+  shipped; the agent is now the *preferred* path per stakeholder
+  directive on OQ11 — see "Open asks" above. `HostTransport`
+  Protocol already abstracts both.
 - **SBC concurrency**: 1 per host, period. MCU host: unbounded,
   per-device locks only.
 - **SBC job shape**: `payload.kind = "git-source"` + `GitDeploy`

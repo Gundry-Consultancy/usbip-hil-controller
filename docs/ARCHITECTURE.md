@@ -1155,116 +1155,218 @@ the Python package + the deploy scripts.
 - Dashboard has a "live tail" panel per job using HTMX SSE on top of
   the same event-log endpoint.
 
-## 15. Open questions
+## 15. Design decisions (formerly open questions)
 
-Things worth resolving before implementation, in rough priority order:
+The original sixteen open questions have been resolved by the
+stakeholder. Each entry below preserves the original question for
+context, captures the stakeholder's verbatim directive, and notes
+the implementation strategy. Section number kept stable so existing
+cross-references (e.g. "§15 OQ11") still resolve.
 
-1. **Artifact provenance.** Do we want to require a signed
-   GitHub Actions attestation for any binary we flash, or is
-   "caller-supplied sha256 + host allow-list" enough for v1?
-2. **Concurrent jobs on the same device family.** Is "one lock per
-   physical device" sufficient, or do some test scripts need exclusive
-   access to a shared resource (e.g. a single camera covering two
-   positions)? If so, generalise to named resource locks.
-3. **Result reporting back to GitHub.** v1 returns results only to the
-   long-poll caller. Do we also want to post a check-run via a GitHub
-   App, so the dashboard can deep-link from the PR?
-4. **USB-IP topology.** When the Pi is *exporting* a device to a remote
-   developer's machine, do we still want the API to be able to grab it
-   back for a CI job (with a "kick" notification), or is the device
-   strictly one mode at a time?
-5. **Camera artifacts.** Always-on capture vs. capture-on-trigger.
-   Storage cost vs. debuggability.
-6. **Snapper-Python / Snapper-Arduino flashing.** Confirm the exact
-   tooling so the flasher adapters can be specced precisely.
-7. **Topology source of truth.** Wiring info today is split across
-   `vendor/hil-detection/references/hardware.md` (power/reset
-   channels) and `vendor/protomq/scripts/*.json` (device↔display
-   binding + display interface). Recommendation: write the
-   `protomq_scripts.py` and `hardware_md.py` importers, produce a
-   single `topology.yaml` we own from here, and let the importers run
-   periodically as a *drift detector* — they flag when an upstream
-   file disagrees with the manifest, rather than overwriting. Open:
-   does the protomq team want to keep adding new boards via more
-   `scripts/*.json` (and we follow), or should new boards land
-   directly in `topology.yaml`?
-8. **Hardcoded password in hil-detection conftest.** The
-   `RPI_PASSWORD = "sjahse98"` constant in
-   `vendor/hil-detection/tests/conftest.py` was originally a
-   workaround; key-based auth for the `pi` user already exists on
-   every HIL host. The cutover is just (a) PR `hil-detection` to
-   read the controller-supplied host context instead of the
-   hardcoded constants, (b) delete the password from the file. This
-   is no longer architectural — it's a small cleanup PR.
-9. **Channel 3 of the solenoid map** is recorded as `UNCONFIRMED` in
-   `hardware.md` — "does not produce unique device on toggle test".
-   Worth a bench session to either populate or formally retire that
-   channel; the resolver will currently see it as a "missing seat".
-10. **Python Wippersnapper repo access.** The Python WS variant is
-    private/unreleased and not vendored. When it opens up we need
-    (a) the canonical repo URL + branch, (b) confirmation of its
-    sub-submodule layout (the user described `displays-v2` →
-    `protomq` + `wippersnapper-protobufs`), (c) whether dual-push to
-    an Adafruit upstream is desired the way protomq dual-pushes to
-    `tyeth/protomq`.
-11. **Host transport: SSH vs. agent.** v1 ships SSH (asyncssh,
-    persistent connection per host, multiplexed channels) because
-    it's zero-install on the HIL hosts beyond the SSH key that's
-    already there. Failure modes that may push us to an HTTP agent
-    later: (a) hung remote processes after a TCP drop (SSH alone
-    can't clean these up without `setsid` + an unhappy reaper),
-    (b) stdout truncation on disconnect mid-flash, (c) wanting to
-    sandbox the per-job pytest invocation under a systemd-run
-    scope. Decision deferred until we hit one of those; the
-    transport interface is shaped so swapping is a single-class
-    change.
-12. **Artifact transfer to HIL hosts.** Two options. (a) Controller
-    fetches the artifact (with sha256 verification), then pushes
-    once to the chosen host's `/tmp/hil/<job-id>/`. (b) Controller
-    hands the URL + sha256 to the host, which fetches it directly.
-    (a) is simpler, keeps egress on one box, and means the host
-    only needs the controller in its allow-list; (b) is faster
-    when the artifact is large and the controller-to-HIL link is
-    slow. Recommend (a) for v1.
-13. **Per-host concurrency caps.** ~~A noisy flash can saturate
-    rpi-displays' USB bus.~~ **Resolved**: Host rows carry
-    `max_concurrent_jobs` (§5.1). SBC hosts default to `1`,
-    microcontroller hosts unbounded. The `exclusive.host` job flag
-    (§7.1) is the explicit opt-in when a job needs the host to
-    itself for hard-to-trace problems — see §9 for scheduling
-    semantics.
-14. **SBC test execution shape.** ~~Flasher vs distinct phase~~
-    **Resolved**: a SBC payload is `payload.kind == "git-source"`
-    and the controller's `GitDeploy` adapter (§10.2) fills the
-    flasher slot in the state machine — clone, render secrets,
-    optional setup command, hand off to the test runner, wipe
-    secrets at terminal. The microcontroller-style state machine
-    (§6) stays unchanged; "flashing" is the right verb for both
-    paths since both turn a payload into a runnable device state.
-15. **Trust model for arbitrary firmware from trusted users.**
-    Trusted users want to flash binaries we have not vetted and
-    run SBC code we have not reviewed. The current draft cordons
-    this with: (a) `trusted-firmware` capability in the auth
-    policy, (b) `requires_trusted` on sensitive secret profiles
-    (§5.8), (c) permissive built-in scripts (`raw-firmware-smoke`,
-    `git-clone-and-run`) that *only* trusted callers can target.
-    Open: do we additionally want to *snapshot* every binary /
-    cloned tree the trusted path runs (sha256 stored, artifact
-    retained for N days) so a post-hoc forensic investigation is
-    possible? And: is `exclusive.host: true` *required* for the
-    permissive scripts (forcing dmesg/usbmon capture so any weird
-    behaviour leaves a trail), or just recommended?
-16. **Live IO production access from the bench.** Using
-    `secrets_profile: live-io-prod` means a DUT on the bench talks
-    to `io.adafruit.com` with a real production account. Open
-    questions: (a) which AIO sub-account exactly — a dedicated
-    bench account, or a real customer account in a sandboxed
-    feed namespace? (b) is there a rate-limit budget we should
-    enforce on the controller side so a runaway bench doesn't
-    hammer the production broker? (c) do we want a "destructive
-    action" deny-list (no `feed-delete`, no `device-delete`) the
-    controller can enforce by inspecting the protomq exchange,
-    or do we trust the test scripts to be well-behaved?
+1. **Artifact provenance.** Originally: signed attestation vs.
+   caller-supplied sha256?
+   **Directive:** "We should support the minimum possible
+   initially, and include extension points and comments for the
+   more effective final solution like attestation, should we wish
+   to implement it."
+   **Implementation:** caller-supplied sha256 + host allow-list for
+   v1 (§12 already wires this). Add a clearly-marked extension
+   point in the verification module so swapping in
+   `actions/attest-build-provenance` later is a one-class change.
+
+2. **Concurrent jobs on the same device family.** Originally: are
+   per-device locks enough, or do we need named shared-resource
+   locks (e.g. a camera covering multiple positions)?
+   **Directive:** "[A] camera can cover multiple devices, and so
+   it would be streaming to a central place, and any test that
+   utilized frames of that video would effectively request a
+   start and end time stamp and the region of interest to
+   capture, which should be stored by the HIL controller, as it
+   is aware of and in charge of setting up regions of interest
+   per device on the camera."
+   **Implementation:** centralised camera stream pipeline owned
+   by the controller. Per-device ROI configuration lives in the
+   topology manifest (§5.5 aux records grow a `roi` block when
+   the aux's `observability` is `camera`). The job event log
+   records `(start_ts, end_ts, roi)` against the central stream;
+   the `CameraCapture` adapter pulls only that window/region back
+   as the per-job artifact. **Replaces** the previous "per-host
+   camera `copy_from`" sketch in §10.2.
+
+3. **Result reporting back to GitHub.** Originally: GitHub App
+   check-runs vs long-poll-only?
+   **Directive:** "I'm not sure yet, but I do want the results to
+   be quite exhaustive and include the video links, the serial
+   logs, and any other appropriate artifacts, along with the
+   test results."
+   **Implementation:** v1 keeps long-poll-only result delivery,
+   but the response schema (§5.4 job event log + §7 endpoints)
+   carries an exhaustive `artifacts[]` array — serial log refs,
+   camera window refs, dmesg/usbmon when exclusive, exit codes,
+   and anything else the test script chooses to attach.
+   Check-run posting remains deferred; do not block on it.
+
+4. **USB-IP topology / force-recover.** Originally: when a Pi
+   exports a device, can the API grab it back?
+   **Directive:** "But we should always be able to forcefully
+   recover, should a test device or bound USB device fail in an
+   unresolvable situation."
+   **Implementation:** an API-driven force-recover endpoint —
+   `POST /v1/devices/{id}/recover` (admin-gated) — that
+   (a) cancels any in-flight job holding the device,
+   (b) clears the device lock and any held mux/host locks,
+   (c) issues a clean detach via `usbip-autoattach` and a
+       power-cycle via the solenoid hub,
+   (d) re-runs the device health probe.
+   Same shape applies at the host level
+   (`POST /v1/hosts/{id}/recover`). Audit log captures the
+   operator + reason.
+
+5. **Camera artifacts: duty cycle.** Originally: always-on vs
+   capture-on-trigger?
+   **Directive:** "We probably want to start the camera briefly
+   before any test. If we receive a request for another test
+   queued up, then we potentially don't stop the camera until
+   all the tests are finished running plus a couple of seconds."
+   **Implementation:** the camera controller is state-aware.
+   Pre-roll for a configurable lead (default ~2s) before the
+   first queued job on a covered position; keep the stream alive
+   while the queue against that position is non-empty; add a
+   trailing buffer (default ~3s) before teardown. The central
+   stream from OQ2 makes this cheap — one writer, many
+   job-event windows.
+
+6. **Snapper-Python / Snapper-Arduino flashing tooling.**
+   Originally: confirm exact toolchain so flasher adapters can
+   be specced.
+   **Directive:** "That's what the HIL testing repo does in the
+   vendor folder. It should include the appropriate flashing
+   technology for all of the Arduino, SBCs, for Python, and any
+   other test devices."
+   **Implementation:** the flasher adapter family in §10.2 wraps
+   the scripts already in `vendor/hil-detection` —
+   `pico_hil_flash.sh`, `usb_hub.py`, the per-device flashing
+   helpers there. Do not reimplement flashing logic locally;
+   call into the vendored scripts via the host transport.
+
+7. **Topology source of truth.** Originally: own a primary
+   manifest with importers as drift detection, or follow
+   upstream files?
+   **Directive:** "The system should own a primary manifest with
+   the importers and upstream effectively acting as drift
+   detection and new changes."
+   **Implementation:** `/etc/hil/topology.yaml` is canonical. The
+   `protomq_scripts.py` and `hardware_md.py` importers in
+   `src/hil_controller/topology/importers/` run as drift
+   detectors — they parse the upstream files and **flag**
+   divergences in the dashboard / audit log, they do not
+   overwrite the manifest. Adding a new board means editing the
+   manifest by hand (or accepting a drift-detector suggestion).
+
+8. **Hardcoded password in hil-detection conftest.**
+   **Directive:** "We can consider this one acknowledged and
+   accounted for."
+   **Implementation:** acknowledged. A separate upstream PR
+   against `tyeth-ai-assisted/hil-detection` will switch the
+   conftest to key-based auth and parameterise the host from
+   the controller's transport context. Do not hot-fix inside
+   this repo.
+
+9. **Solenoid map channel 3.** Originally: "UNCONFIRMED" channel
+   — populate or retire?
+   **Directive:** "Assume all solenoid channels are working."
+   **Implementation:** topology seed treats channel 3 as
+   available. Health probe failures will surface real issues if
+   any; no special-case quarantine.
+
+10. **Python Wippersnapper repo access.** Originally: vendor it
+    when reachable, with what dual-push pattern?
+    **Directive:** "Let's skip over that for now."
+    **Implementation:** deferred. No submodule, no template
+    changes. Re-open when the repo opens up.
+
+11. **Host transport: SSH vs HTTP agent.** Originally: SSH for
+    v1, agent later?
+    **Directive:** "I prefer HTTP versus SSH, but we should
+    facilitate both."
+    **Implementation:** the existing `HostTransport` Protocol in
+    `src/hil_controller/hosts/base.py` already abstracts both.
+    v1 ships `ssh.py` (already in tree). **Add `agent.py` as the
+    preferred transport** — small Python service per HIL host,
+    HTTPS API, mTLS or controller-signed token auth, exposing
+    `exec` / `stream` / `copy_to` / `copy_from` /
+    `healthcheck` one-to-one with the protocol. Per-host config
+    picks which transport is used; SSH stays as the fallback
+    for hosts where the agent isn't installed yet.
+    **Deviation from the originally-shipped M3 SSH-only
+    decision; needs a follow-up implementation pass.**
+
+12. **Artifact transfer to HIL hosts.** Originally: controller
+    pulls then pushes, vs each host fetches directly?
+    **Directive:** "We might need to test both methodologies,
+    but we should at least consider the fact the host
+    controller is the one in charge collecting firmwares, and
+    the others may have restricted internet access."
+    **Implementation:** support both in code; **default is
+    controller-pulls-then-pushes**. A per-host config flag
+    (`fetch_locally: false` by default) lets specific hosts opt
+    in to direct fetch when they have outbound. Restricted-
+    network hosts work out of the box because the controller is
+    their only required egress.
+
+13. **Per-host concurrency caps.**
+    **Directive:** (prior contextual rule.) SBC hosts run one
+    job or suite at a time; microcontroller host runs many
+    bounded only by per-device locks.
+    **Implementation:** already in §5.1 `max_concurrent_jobs` +
+    §9 per-host semaphore; M3 scheduler plumbed.
+
+14. **SBC test execution shape.**
+    **Directive:** "This will follow the git deploy adapter
+    approach, handling cloning, rendering secrets, and running
+    the tests on the remote host."
+    **Implementation:** `GitDeployAdapter` already shipped at
+    `src/hil_controller/adapters/git_deploy.py` (M4.5). Fills
+    the flasher slot in §6 for `payload.kind == "git-source"`.
+
+15. **Trust model and arbitrary-firmware forensic storage.**
+    Originally: `trusted-firmware` capability gates permissive
+    scripts; do we additionally snapshot every trusted binary /
+    clone for forensic review, and is `exclusive.host`
+    required?
+    **Directive:** "In an ideal world, yes, for up to thirty
+    days, or until capacity reaches seventy-five percent."
+    **Implementation:** every permissive-script job (caller has
+    `trusted-firmware` capability) snapshots its payload —
+    firmware sha256 + binary blob, or the cloned-tree archive —
+    to `/var/lib/hil/forensic/<job-id>/`. A retention daemon
+    (`src/hil_controller/forensic.py`, to be written) sweeps:
+    (a) **30-day cap**: delete entries with `finished_at` older
+        than 30 days,
+    (b) **75% volume cap**: if `/var/lib/hil` partition exceeds
+        75% usage, evict oldest-first until under that mark.
+    Whichever triggers first wins. Audit log records every
+    eviction. `exclusive.host: true` is **recommended but not
+    required** for permissive scripts — the snapshot is the
+    durable record; dmesg/usbmon under exclusive is diagnostic
+    gravy on top.
+
+16. **Live IO production access from the bench.**
+    **Directive:** "That's up to the test caller to decide, but
+    I'm assuming they will provide us with appropriate test
+    accounts for any system they are contacting. Alternatively,
+    if it's a local-only test, then the secrets are immaterial,
+    and that's what we'll probably be doing initially."
+    **Implementation:** controller does not enforce a
+    destructive-action deny-list against the protomq exchange —
+    caller's chosen `secrets_profile` (§5.8) supplies the AIO
+    account and the caller is responsible for that account
+    being appropriate (dedicated test account, rate-limit sane,
+    etc). Default posture is local-only: the `bench-protomq`
+    profile points at `pi5-protomq:1884` and the bench works
+    end-to-end without any live-IO credentials at all.
+    `live-io-test` / `live-io-prod` profiles are policy-gated
+    (§8) but their contents are caller-supplied.
 
 ## 16. Milestones
 
