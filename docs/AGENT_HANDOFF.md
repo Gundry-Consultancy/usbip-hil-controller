@@ -50,17 +50,36 @@ Done:
       Wired to SBC jobs via `git-clone-and-run` script name.
 - [x] `deploy/topology.example.yaml`, systemd unit,
       `deploy/controller.env.example`.
+- [x] `LocalTransport` (`hosts/local.py`) — asyncio subprocess transport
+      for localhost SBC jobs; topology `kind: local` routes to it.
+      `source.pat` injects a GH PAT into the HTTPS clone URL.
+- [x] Log streaming — `GitDeployAdapter` stores `_run_stdout/_run_stderr/
+      _deploy_stdout/_deploy_stderr`; `JobWorker` emits them as `log` kind
+      events on the long-poll stream after deploy and run phases.
+      `Scheduler` now wired to `RealHostRegistry` in `main.py` (was always
+      `_FakeAdapter` before regardless of topology).
+- [x] **M5 partial** — `ProtoMQObserver` (`adapters/protomq_observer.py`):
+      HTTP script activation, MQTT `#` wildcard subscription, log event
+      forwarding, completed-steps summary on teardown. `aiomqtt>=2.0`.
+      Configured via `params.protomq.{broker_host,mqtt_port,api_port,script}`.
+- [x] `examples/wippersnapper-python/job.json` — ready-to-use job body
+      with `params.protomq` block.
+- [x] `scripts/submit-wipper-test.sh` — GH PAT + ref substitution via jq,
+      calls `hil-call.sh`.
+- [x] 87 tests pass.
 
 Not done:
 
 - [ ] **M2 remainder** — GitHub OIDC verifier, policy file.
 - [ ] **M2.5** — secret profiles YAML; per-job secrets materialisation
-      onto HIL host; artifact sanitisation.
+      onto HIL host; artifact sanitisation. Blocking full-bench Python runs.
 - [ ] **M3.5** — MCU adapter chain (serial capture, esptool, MCP23017).
 - [ ] **M4** — USB-IP, solenoid-hub reset, uf2-msc / picotool flashers,
       hardcoded-password cleanup (OQ8).
-- [ ] **M5** — ProtoMQ helpers, camera capture, artifact storage,
-      Prometheus metrics, `raw-firmware-smoke` built-in.
+- [ ] **M5 remainder** — camera capture; artifact storage; Prometheus
+      metrics; `raw-firmware-smoke` built-in; `live-io-test`/`live-io-prod`
+      profiles; protobuf decoding for MQTT messages;
+      `GET /v1/jobs/{id}/logs` non-blocking endpoint.
 - [ ] HTMX dashboard (queue + device view).
 - [ ] `topology/importers/` (`protomq_scripts.py`, `hardware_md.py`).
 

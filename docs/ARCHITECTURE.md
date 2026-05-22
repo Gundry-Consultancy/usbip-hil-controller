@@ -819,6 +819,14 @@ goes through an SSH channel running `socat OPEN:/dev/serial/by-id/...
 - ` (or equivalent) so the bytestream is line-buffered to the
 controller without temp files.
 
+**`LocalTransport`** (`hosts/local.py`) is a second concrete
+implementation that runs commands via `asyncio.create_subprocess_exec`
+on the controller machine itself. Topology hosts with `kind: local`
+route to it; no SSH config needed. Used for localhost SBC jobs (e.g.
+running Wippersnapper_Python pytest suites without real SBC hardware)
+and for CI environments where the controller and test target are the
+same machine.
+
 A future `agent` transport — small Python service running as a
 systemd unit on each HIL host, exposing an HTTPS API the controller
 calls — is sketched as a drop-in alternative once SSH's failure modes
@@ -1411,13 +1419,31 @@ Status key: **[done]** shipped, **[partial]** partially implemented, **[open]** 
 - **M4** [open] — USB-IP via `usbip-autoattach`, solenoid-hub reset,
   `uf2-msc` + `picotool` flashers, hardcoded-password cleanup (OQ8).
 
-- **M4.5** [done] — `GitDeployAdapter` (clone → setup → run → cleanup over SSH),
-  `RealHostRegistry.get_adapter` wires it to SBC jobs via `git-clone-and-run`.
-  `deploy/topology.example.yaml` seeds the first SBC host config.
+- **M4.5** [done] — `GitDeployAdapter` (clone → setup → run → cleanup over SSH or
+  local subprocess). `RealHostRegistry.get_adapter` wires it to SBC jobs via
+  `git-clone-and-run`. `deploy/topology.example.yaml` seeds the first SBC host
+  config. `LocalTransport` (`hosts/local.py`, asyncio subprocess) added alongside
+  `SSHTransport`; topology hosts with `kind: local` use it for localhost SBC jobs
+  without SSH. `source.pat` field injects a GitHub PAT into the HTTPS clone URL.
+  `GitDeployAdapter` stores captured stdout/stderr in `_run_*` / `_deploy_*`
+  attributes; `JobWorker` emits them as `log` kind events on the long-poll stream
+  after each phase. `Scheduler` now wired to `RealHostRegistry` in `main.py`
+  (previously always fell back to `_FakeAdapter` regardless of topology).
+  `examples/wippersnapper-python/job.json` + `scripts/submit-wipper-test.sh`
+  provide a ready-to-use non-hardware test submission. 65 tests.
 
-- **M5** [open] — ProtoMQ helpers; camera capture; artifact storage; Prometheus
-  `/metrics`; `raw-firmware-smoke` permissive built-in; `live-io-test` /
-  `live-io-prod` profiles; Python Wippersnapper submodule (OQ10).
+- **M5** [partial] — `ProtoMQObserver` (`adapters/protomq_observer.py`): activates
+  a named script on the ProtoMQ broker via HTTP API
+  (`POST /api/scripts/{name}/activate`), subscribes to MQTT `#` wildcard and
+  forwards all messages as `log` events during the run phase (protobuf topics shown
+  as `<protobuf Nb>`, others decoded UTF-8), emits completed steps at teardown.
+  Runs as a concurrent `asyncio.Task` alongside the test; cancelled cleanly on
+  finish/error/timeout. `aiomqtt>=2.0` added. Configured via
+  `params.protomq.{broker_host, mqtt_port, api_port, script}`. 87 tests.
+  Still open: camera capture; artifact storage; Prometheus `/metrics`;
+  `raw-firmware-smoke` built-in; `live-io-test`/`live-io-prod` profiles;
+  Python Wippersnapper submodule (OQ10); protobuf decoding for MQTT messages;
+  `GET /v1/jobs/{id}/logs` non-blocking endpoint.
 
 Past M5 we revisit dynamic hardware switching, GitHub check-run posting,
 and the SSH → agent transport upgrade (open question 11) based on what
