@@ -935,8 +935,8 @@ def _render_events(events: list[dict]) -> str:
 
 
 _JOB_DEFAULTS = {
-    "no_hw_args": '-m "not hardware" -v --tb=short',
-    "hw_args": '-m "display or hardware" -v --tb=short',
+    "no_hw_cmd": '.venv/bin/python -m pytest -m "not hardware" -v --tb=short',
+    "hw_cmd": '.venv/bin/python -m pytest -m "display or hardware" -v --tb=short',
 }
 
 
@@ -1005,7 +1005,7 @@ def _build_job_request(
     submodules: bool,
     setup: str,
     hw_mode: str,
-    test_args: str,
+    test_cmd: str,
     protomq_script: str,
     device_id: str,
     requires_aux: str,
@@ -1018,9 +1018,6 @@ def _build_job_request(
     timeout_run: int,
     timeout_deploy: int,
 ) -> dict:
-    parsed_args = shlex.split(test_args) if test_args.strip() else []
-    full_args = ["-m", "pytest"] + parsed_args
-
     extra_env: dict = {}
     if hw_mode == "no_hardware":
         extra_env["BLINKA_OS_AGNOSTIC"] = "1"
@@ -1035,8 +1032,8 @@ def _build_job_request(
 
     _mqtt_port = int(mqtt_port) if mqtt_port.strip().isdigit() else 1884
     params: dict = {
-        "entry": "python",
-        "args": full_args,
+        "entry": "bash",
+        "args": ["-c", test_cmd.replace("\r\n", "\n").replace("\r", "\n")],
         "secrets_format": "dotenv",
         "extra_env": extra_env,
     }
@@ -1138,7 +1135,7 @@ async def submit_job_form(
     submodules: Annotated[str, Form()] = "",
     setup: Annotated[str, Form()] = "pip install -e .[test]",
     hw_mode: Annotated[str, Form()] = "no_hardware",
-    test_args: Annotated[str, Form()] = '-m "not hardware" -v --tb=short',
+    test_cmd: Annotated[str, Form()] = '.venv/bin/python -m pytest -m "not hardware" -v --tb=short',
     protomq_script: Annotated[str, Form()] = "",
     device_id: Annotated[str, Form()] = "",
     requires_aux: Annotated[str, Form()] = "",
@@ -1162,7 +1159,7 @@ async def submit_job_form(
 
     form_vals = {
         "repo": repo, "ref": ref, "pat": pat, "setup": setup,
-        "submodules": bool(submodules), "hw_mode": hw_mode, "test_args": test_args,
+        "submodules": bool(submodules), "hw_mode": hw_mode, "test_cmd": test_cmd,
         "protomq_script": protomq_script, "device_id": device_id, "requires_aux": requires_aux,
         "secrets_profile": secrets_profile, "mqtt_host": mqtt_host, "mqtt_port": mqtt_port,
         "io_username": io_username, "io_key": io_key,
@@ -1181,7 +1178,7 @@ async def submit_job_form(
         job_req = _build_job_request(
             repo=repo, ref=ref, pat=pat,
             submodules=bool(submodules), setup=setup,
-            hw_mode=hw_mode, test_args=test_args,
+            hw_mode=hw_mode, test_cmd=test_cmd,
             protomq_script=protomq_script, device_id=device_id,
             requires_aux=requires_aux, secrets_profile=secrets_profile,
             mqtt_host=mqtt_host, mqtt_port=mqtt_port,

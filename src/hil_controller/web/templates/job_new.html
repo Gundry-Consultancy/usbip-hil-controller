@@ -91,11 +91,10 @@
     </div>
     <div class="form-grid">
       <div class="form-group" style="grid-column:span 2;">
-        <label for="test_args">Pytest arguments</label>
-        <input type="text" id="test_args" name="test_args"
-          value="{{ form.test_args if form else defaults.no_hw_args }}"
-          placeholder="-m 'not hardware' -v --tb=short">
-        <span class="form-hint">Everything after <code>python -m pytest</code>. Shell-split, so quoting works.</span>
+        <label for="test_cmd">Test command</label>
+        <textarea id="test_cmd" name="test_cmd" rows="2"
+          placeholder=".venv/bin/python -m pytest -m 'not hardware' -v --tb=short">{{ form.test_cmd if form else defaults.no_hw_cmd }}</textarea>
+        <span class="form-hint">Full shell command run in repo root. Use <code>.venv/bin/python</code> to run inside the venv created by setup.</span>
       </div>
       <div class="form-group" id="protomq-row">
         <label for="protomq_script">ProtoMQ Script (hardware tests)</label>
@@ -178,8 +177,8 @@
 </form>
 
 <script>
-const HW_ARGS = {{ defaults.hw_args | tojson | safe }};
-const SW_ARGS = {{ defaults.no_hw_args | tojson | safe }};
+const HW_CMD = {{ defaults.hw_cmd | tojson | safe }};
+const SW_CMD = {{ defaults.no_hw_cmd | tojson | safe }};
 
 const PRESETS = {
   'local-anon':  {host: '127.0.0.1', port: '1884', user: '', key: ''},
@@ -200,13 +199,13 @@ function applyPreset(name) {
 }
 
 function onHwMode(val) {
-  const argsEl = document.getElementById('test_args');
+  const cmdEl = document.getElementById('test_cmd');
   const protomqRow = document.getElementById('protomq-row');
   if (val === 'hardware') {
-    if (!argsEl.value.trim() || argsEl.value === SW_ARGS) argsEl.value = HW_ARGS;
+    if (!cmdEl.value.trim() || cmdEl.value === SW_CMD) cmdEl.value = HW_CMD;
     protomqRow.style.display = '';
   } else {
-    if (!argsEl.value.trim() || argsEl.value === HW_ARGS) argsEl.value = SW_ARGS;
+    if (!cmdEl.value.trim() || cmdEl.value === HW_CMD) cmdEl.value = SW_CMD;
     protomqRow.style.display = 'none';
   }
 }
