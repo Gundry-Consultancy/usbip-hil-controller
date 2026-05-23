@@ -34,8 +34,8 @@
       </div>
       <div class="form-group" style="grid-column:span 2;">
         <label for="setup">Setup command</label>
-        <textarea id="setup" name="setup" rows="2"
-          placeholder="pip install -e .[test]">{{ form.setup if form else 'pip install -e .[test]' }}</textarea>
+        <textarea id="setup" name="setup" rows="4"
+          placeholder="pip install -e .[test]">{{ form.setup if form else 'sudo apt install -y python3-venv &&\npython3 -m venv .venv &&\n. ./.venv/bin/activate &&\npip install -e .' }}</textarea>
         <span class="form-hint">Shell command run in repo root after clone. Supports <code>&&</code>, pipes, multi-step.</span>
       </div>
       <div class="form-group" style="align-self:end;">

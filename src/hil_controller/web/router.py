@@ -1133,7 +1133,7 @@ async def submit_job_form(
     ref: Annotated[str, Form()] = "main",
     pat: Annotated[str, Form()] = "",
     submodules: Annotated[str, Form()] = "",
-    setup: Annotated[str, Form()] = "pip install -e .[test]",
+    setup: Annotated[str, Form()] = "sudo apt install -y python3-venv &&\npython3 -m venv .venv &&\n. ./.venv/bin/activate &&\npip install -e .",
     hw_mode: Annotated[str, Form()] = "no_hardware",
     test_cmd: Annotated[str, Form()] = '.venv/bin/python -m pytest -m "not hardware" -v --tb=short',
     protomq_script: Annotated[str, Form()] = "",
