@@ -134,6 +134,10 @@ class GitDeployAdapter:
             if "env" in fmts:
                 env = dict(self._secrets)
 
+        extra_env = self.params.get("extra_env") or {}
+        if extra_env:
+            env = {**(env or {}), **extra_env}
+
         result = await self.transport.exec(argv, cwd=str(self.work_dir), env=env)
         self._run_stdout = result.stdout
         self._run_stderr = result.stderr

@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import html
 import json
 import logging
+import shlex
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated
 
@@ -865,3 +868,347 @@ async def script_detail(
         f"<p>{desc}</p></div>"
         f"<pre><code>{body}</code></pre>"
     )
+
+
+# ---------------------------------------------------------------------------
+# Jobs
+# ---------------------------------------------------------------------------
+
+
+def _duration(started: str | None, finished: str | None) -> str:
+    if not started or not finished:
+        return ""
+    try:
+        fmt = "%Y-%m-%dT%H:%M:%S"
+        s = datetime.fromisoformat(started)
+        f = datetime.fromisoformat(finished)
+        secs = int((f - s).total_seconds())
+        return f"{secs // 60}m {secs % 60}s"
+    except Exception:
+        return ""
+
+
+async def _job_rows(db_path: str, limit: int = 100) -> list[dict]:
+    async with get_db(db_path) as db:
+        async with db.execute(
+            "SELECT * FROM jobs ORDER BY created_at DESC LIMIT ?", (limit,)
+        ) as cur:
+            rows = await cur.fetchall()
+    result = []
+    for r in rows:
+        j = dict(r)
+        req = json.loads(j.get("request_json") or "{}")
+        src = (req.get("payload") or {}).get("source") or {}
+        j["repo_url"] = src.get("repo", "")
+        j["ref"] = src.get("ref", "")
+        j["duration"] = _duration(j.get("started_at"), j.get("finished_at"))
+        result.append(j)
+    return result
+
+
+def _render_events(events: list[dict]) -> str:
+    lines = []
+    colours = {"stdout": "#c9d1d9", "stderr": "#f97583", "protomq": "#79c0ff", "state": "#d2a8ff"}
+    for ev in events:
+        kind = ev.get("kind", "")
+        payload = ev.get("payload", {})
+        at = ev.get("at", "")[:19]
+        if kind == "log":
+            stream = payload.get("stream", "stdout")
+            msg = html.escape(payload.get("msg", ""))
+            colour = colours.get(stream, "#c9d1d9")
+            lines.append(
+                f'<div style="color:{colour};font-family:monospace;font-size:0.75rem;white-space:pre-wrap;">'
+                f'<span style="color:#6c757d;user-select:none;">[{at}] </span>{msg}</div>'
+            )
+        elif kind == "state":
+            st = payload.get("state", "")
+            colour = colours["state"]
+            lines.append(
+                f'<div style="color:{colour};font-family:monospace;font-size:0.75rem;">'
+                f'<span style="color:#6c757d;user-select:none;">[{at}] </span>'
+                f'<b>── state: {html.escape(st)} ──</b></div>'
+            )
+    return "\n".join(lines) if lines else '<span style="color:#6c757d;font-size:0.8rem;">No output yet.</span>'
+
+
+async def _call_jobs_api(request: Request, job_request: dict, token: str) -> dict:
+    """Submit a job via the internal /v1/jobs API and return the response dict."""
+    from httpx import ASGITransport, AsyncClient
+
+    async with AsyncClient(
+        transport=ASGITransport(app=request.app), base_url="http://test"
+    ) as c:
+        r = await c.post(
+            "/v1/jobs",
+            json=job_request,
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    if r.status_code not in (200, 202):
+        raise ValueError(r.json().get("detail", f"HTTP {r.status_code}"))
+    return r.json()
+
+
+def _build_job_request(
+    *,
+    repo: str,
+    ref: str,
+    pat: str,
+    submodules: bool,
+    setup: str,
+    hw_mode: str,
+    test_args: str,
+    protomq_script: str,
+    device_id: str,
+    requires_aux: str,
+    secrets_profile: str,
+    timeout_total: int,
+    timeout_run: int,
+    timeout_deploy: int,
+) -> dict:
+    parsed_args = shlex.split(test_args) if test_args.strip() else []
+    full_args = ["-m", "pytest"] + parsed_args
+
+    extra_env: dict = {}
+    if hw_mode == "no_hardware":
+        extra_env["BLINKA_OS_AGNOSTIC"] = "1"
+
+    target: dict = {"pool": "wippersnapper-python"}
+    if device_id:
+        target["device"] = {"id": device_id}
+    else:
+        target["device"] = {"kind": "sbc", "capabilities": ["python-snapper"]}
+    if requires_aux:
+        target["requires"] = [{"id": requires_aux}]
+
+    params: dict = {
+        "entry": "python",
+        "args": full_args,
+        "secrets_format": "dotenv",
+        "extra_env": extra_env,
+    }
+    if protomq_script:
+        params["protomq"] = {
+            "broker_host": "127.0.0.1",
+            "mqtt_port": 1884,
+            "api_port": 5173,
+            "script": protomq_script,
+        }
+
+    source: dict = {
+        "repo": repo,
+        "ref": ref,
+        "shallow": True,
+        "submodules": submodules,
+        "setup": shlex.split(setup) if setup.strip() else [],
+    }
+    if pat:
+        source["pat"] = pat
+
+    return {
+        "target": target,
+        "script": "pytest-suite",
+        "payload": {"kind": "git-source", "source": source},
+        "params": params,
+        "secrets_profile": secrets_profile,
+        "timeouts": {
+            "total_s": timeout_total,
+            "deploy_s": timeout_deploy,
+            "run_s": timeout_run,
+            "flash_s": 120,
+        },
+    }
+
+
+@router.get("/jobs", response_class=HTMLResponse, include_in_schema=False)
+async def jobs_page(
+    request: Request, hil_token: str = Cookie(default="")
+) -> HTMLResponse:
+    if not (await _check_web_token(request, hil_token)):
+        return _login_redirect()
+    db_path: str = request.app.state.db_path
+    jobs = await _job_rows(db_path)
+    return _tr(request, "jobs.html", {"token": hil_token, "active": "jobs", "jobs": jobs})
+
+
+@router.get("/jobs/list", response_class=HTMLResponse, include_in_schema=False)
+async def jobs_list_partial(
+    request: Request, hil_token: str = Cookie(default="")
+) -> HTMLResponse:
+    if not (await _check_web_token(request, hil_token)):
+        return HTMLResponse("", status_code=401)
+    db_path: str = request.app.state.db_path
+    jobs = await _job_rows(db_path)
+    return _tr(request, "jobs_body.html", {"jobs": jobs})
+
+
+@router.get("/jobs/new", response_class=HTMLResponse, include_in_schema=False)
+async def new_job_page(
+    request: Request, hil_token: str = Cookie(default="")
+) -> HTMLResponse:
+    if not (await _check_web_token(request, hil_token)):
+        return _login_redirect()
+    db_path: str = request.app.state.db_path
+    sbc_devices = [d for d in await _devices(db_path) if d["kind"] == "sbc"]
+
+    from hil_controller.config import get_settings
+    scripts_dir = get_settings().scripts_dir
+    scripts = sorted(Path(scripts_dir).glob("*.json")) if scripts_dir and Path(scripts_dir).exists() else []
+
+    return _tr(request, "job_new.html", {
+        "token": hil_token,
+        "active": "jobs",
+        "sbc_devices": sbc_devices,
+        "scripts": scripts,
+        "form": None,
+        "error": None,
+    })
+
+
+@router.post("/jobs", include_in_schema=False, response_model=None)
+async def submit_job_form(
+    request: Request,
+    hil_token: str = Cookie(default=""),
+    repo: Annotated[str, Form()] = "",
+    ref: Annotated[str, Form()] = "main",
+    pat: Annotated[str, Form()] = "",
+    submodules: Annotated[str, Form()] = "",
+    setup: Annotated[str, Form()] = "pip install -e .[test]",
+    hw_mode: Annotated[str, Form()] = "no_hardware",
+    test_args: Annotated[str, Form()] = '-m "not hardware" -v --tb=short',
+    protomq_script: Annotated[str, Form()] = "",
+    device_id: Annotated[str, Form()] = "",
+    requires_aux: Annotated[str, Form()] = "",
+    secrets_profile: Annotated[str, Form()] = "bench-protomq",
+    timeout_total: Annotated[str, Form()] = "600",
+    timeout_run: Annotated[str, Form()] = "300",
+    timeout_deploy: Annotated[str, Form()] = "180",
+) -> Response:
+    if not (await _check_web_token(request, hil_token)):
+        return _login_redirect()
+
+    db_path: str = request.app.state.db_path
+    sbc_devices = [d for d in await _devices(db_path) if d["kind"] == "sbc"]
+    from hil_controller.config import get_settings
+    scripts_dir = get_settings().scripts_dir
+    scripts = sorted(Path(scripts_dir).glob("*.json")) if scripts_dir and Path(scripts_dir).exists() else []
+
+    form_vals = {
+        "repo": repo, "ref": ref, "pat": pat, "setup": setup,
+        "submodules": bool(submodules), "hw_mode": hw_mode, "test_args": test_args,
+        "protomq_script": protomq_script, "device_id": device_id, "requires_aux": requires_aux,
+        "secrets_profile": secrets_profile, "timeout_total": timeout_total,
+        "timeout_run": timeout_run, "timeout_deploy": timeout_deploy,
+    }
+
+    if not repo:
+        return _tr(request, "job_new.html", {
+            "token": hil_token, "active": "jobs",
+            "sbc_devices": sbc_devices, "scripts": scripts,
+            "form": form_vals, "error": "Repository URL is required",
+        })
+
+    try:
+        job_req = _build_job_request(
+            repo=repo, ref=ref, pat=pat,
+            submodules=bool(submodules), setup=setup,
+            hw_mode=hw_mode, test_args=test_args,
+            protomq_script=protomq_script, device_id=device_id,
+            requires_aux=requires_aux, secrets_profile=secrets_profile,
+            timeout_total=int(timeout_total or 600),
+            timeout_run=int(timeout_run or 300),
+            timeout_deploy=int(timeout_deploy or 180),
+        )
+        resp = await _call_jobs_api(request, job_req, hil_token)
+        job_id = resp["id"]
+    except Exception as exc:
+        return _tr(request, "job_new.html", {
+            "token": hil_token, "active": "jobs",
+            "sbc_devices": sbc_devices, "scripts": scripts,
+            "form": form_vals, "error": str(exc),
+        })
+
+    return RedirectResponse(f"/ui/jobs/{job_id}", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.get("/jobs/{job_id}", response_class=HTMLResponse, include_in_schema=False)
+async def job_detail(
+    request: Request, job_id: str, hil_token: str = Cookie(default="")
+) -> HTMLResponse:
+    if not (await _check_web_token(request, hil_token)):
+        return _login_redirect()
+    db_path: str = request.app.state.db_path
+    async with get_db(db_path) as db:
+        from hil_controller.db.connection import get_job, get_events_since
+        row = await get_job(db, job_id)
+        if row is None:
+            return HTMLResponse("Job not found", status_code=404)
+        events = await get_events_since(db, job_id, -1)
+
+    j = dict(row)
+    req = json.loads(j.get("request_json") or "{}")
+    src = (req.get("payload") or {}).get("source") or {}
+    j["repo_url"] = src.get("repo", "")
+    j["ref"] = src.get("ref", "")
+    j["duration"] = _duration(j.get("started_at"), j.get("finished_at"))
+
+    return _tr(request, "job_detail.html", {
+        "token": hil_token,
+        "active": "jobs",
+        "job": j,
+        "log_html": _render_events(events),
+    })
+
+
+@router.get("/jobs/{job_id}/log", response_class=HTMLResponse, include_in_schema=False)
+async def job_log_partial(
+    request: Request, job_id: str, hil_token: str = Cookie(default="")
+) -> HTMLResponse:
+    if not (await _check_web_token(request, hil_token)):
+        return HTMLResponse("", status_code=401)
+    db_path: str = request.app.state.db_path
+    async with get_db(db_path) as db:
+        from hil_controller.db.connection import get_job, get_events_since
+        row = await get_job(db, job_id)
+        if row is None:
+            return HTMLResponse("Job not found", status_code=404)
+        events = await get_events_since(db, job_id, -1)
+    return HTMLResponse(_render_events(events))
+
+
+@router.post("/jobs/{job_id}/rerun", include_in_schema=False, response_model=None)
+async def rerun_job(
+    request: Request, job_id: str, hil_token: str = Cookie(default="")
+) -> Response:
+    if not (await _check_web_token(request, hil_token)):
+        return _login_redirect()
+    db_path: str = request.app.state.db_path
+    async with get_db(db_path) as db:
+        from hil_controller.db.connection import get_job
+        row = await get_job(db, job_id)
+    if row is None:
+        return HTMLResponse("Job not found", status_code=404)
+    original_req = json.loads(row["request_json"])
+    try:
+        resp = await _call_jobs_api(request, original_req, hil_token)
+        new_id = resp["id"]
+    except Exception as exc:
+        return HTMLResponse(f'<div class="alert alert-error">{html.escape(str(exc))}</div>')
+    return Response(status_code=200, headers={"HX-Redirect": f"/ui/jobs/{new_id}"})
+
+
+@router.post("/jobs/{job_id}/cancel", include_in_schema=False, response_model=None)
+async def cancel_job_web(
+    request: Request, job_id: str, hil_token: str = Cookie(default="")
+) -> Response:
+    if not (await _check_web_token(request, hil_token)):
+        return _login_redirect()
+    from httpx import ASGITransport, AsyncClient
+    async with AsyncClient(
+        transport=ASGITransport(app=request.app), base_url="http://test"
+    ) as c:
+        await c.post(
+            f"/v1/jobs/{job_id}/cancel",
+            headers={"Authorization": f"Bearer {hil_token}"},
+        )
+    return Response(status_code=200, headers={"HX-Redirect": f"/ui/jobs/{job_id}"})

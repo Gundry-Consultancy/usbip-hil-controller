@@ -449,3 +449,55 @@ async def test_static_css_served(client):
     r = await client.get("/ui/static/app.css")
     assert r.status_code == 200
     assert "body" in r.text
+
+
+# ---------------------------------------------------------------------------
+# Jobs UI
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_jobs_page_renders(client):
+    r = await client.get("/ui/jobs", cookies=COOKIE)
+    assert r.status_code == 200
+    assert "Test Jobs" in r.text
+
+
+@pytest.mark.asyncio
+async def test_new_job_page_renders(client):
+    r = await client.get("/ui/jobs/new", cookies=COOKIE)
+    assert r.status_code == 200
+    assert "Repository URL" in r.text
+    assert "No hardware" in r.text
+    assert "BLINKA_OS_AGNOSTIC" in r.text
+
+
+@pytest.mark.asyncio
+async def test_submit_job_missing_repo_shows_error(client):
+    r = await client.post(
+        "/ui/jobs",
+        data={"repo": "", "ref": "main", "hw_mode": "no_hardware",
+              "test_args": '-m "not hardware" -v', "secrets_profile": "bench-protomq",
+              "timeout_total": "600", "timeout_run": "300", "timeout_deploy": "180"},
+        cookies=COOKIE,
+    )
+    assert r.status_code == 200
+    assert "required" in r.text.lower()
+
+
+@pytest.mark.asyncio
+async def test_jobs_list_partial(client):
+    r = await client.get("/ui/jobs/list", cookies=COOKIE)
+    assert r.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_job_detail_not_found(client):
+    r = await client.get("/ui/jobs/nonexistent-id", cookies=COOKIE)
+    assert r.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_job_log_partial_not_found(client):
+    r = await client.get("/ui/jobs/nonexistent-id/log", cookies=COOKIE)
+    assert r.status_code == 404
