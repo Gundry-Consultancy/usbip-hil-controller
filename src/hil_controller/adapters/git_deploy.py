@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import shlex
 from pathlib import PurePosixPath
 from typing import Any
 
@@ -102,6 +103,14 @@ class GitDeployAdapter:
         if submodules:
             clone_cmd += ["--recurse-submodules"]
         clone_cmd += ["--branch", ref, repo, str(self.work_dir)]
+        # echo command using original URL (PAT redacted)
+        display_clone = ["git", "clone"]
+        if shallow:
+            display_clone += ["--depth", "1"]
+        if submodules:
+            display_clone += ["--recurse-submodules"]
+        display_clone += ["--branch", ref, self.source["repo"], str(self.work_dir)]
+        self._deploy_stdout += f"$ {shlex.join(display_clone)}\n"
         result = await self.transport.exec(clone_cmd)
         self._deploy_stderr += result.stderr
         if result.exit_status != 0:
@@ -109,6 +118,7 @@ class GitDeployAdapter:
 
         # setup command (e.g. pip install)
         if setup:
+            self._deploy_stdout += f"$ {shlex.join(setup)}\n"
             result = await self.transport.exec(setup, cwd=str(self.work_dir))
             self._deploy_stdout += result.stdout
             self._deploy_stderr += result.stderr

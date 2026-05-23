@@ -1053,7 +1053,7 @@ def _build_job_request(
         "ref": ref,
         "shallow": True,
         "submodules": submodules,
-        "setup": shlex.split(setup) if setup.strip() else [],
+        "setup": ["bash", "-c", setup] if setup.strip() else [],
     }
     if pat:
         source["pat"] = pat

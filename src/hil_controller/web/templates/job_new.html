@@ -32,12 +32,11 @@
           value="{{ form.pat if form else '' }}" placeholder="ghp_… short-lived token">
         <span class="form-hint">Only needed for private repos or authenticated submodule access</span>
       </div>
-      <div class="form-group">
+      <div class="form-group" style="grid-column:span 2;">
         <label for="setup">Setup command</label>
-        <input type="text" id="setup" name="setup"
-          value="{{ form.setup if form else 'pip install -e .[test]' }}"
-          placeholder="pip install -e .[test]">
-        <span class="form-hint">Runs in repo root after clone</span>
+        <textarea id="setup" name="setup" rows="2"
+          placeholder="pip install -e .[test]">{{ form.setup if form else 'pip install -e .[test]' }}</textarea>
+        <span class="form-hint">Shell command run in repo root after clone. Supports <code>&&</code>, pipes, multi-step.</span>
       </div>
       <div class="form-group" style="align-self:end;">
         <label>

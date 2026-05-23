@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import shlex
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -123,6 +124,15 @@ class JobWorker:
 
     async def _deploy_git_source(self) -> None:
         if hasattr(self.adapter, "deploy"):
+            source = getattr(self.adapter, "source", {})
+            repo = source.get("repo", "")
+            ref = source.get("ref", "")
+            setup: list[str] = source.get("setup") or []
+            msg = f"cloning {repo} @ {ref}"
+            if setup:
+                cmd_str = setup[2] if len(setup) == 3 and setup[:2] == ["bash", "-c"] else shlex.join(setup)
+                msg += f"\nsetup: {cmd_str}"
+            await self._emit("log", {"stream": "deploy:info", "msg": msg})
             await self.adapter.deploy()  # type: ignore[attr-defined]
             for attr, stream in [("_deploy_stdout", "deploy:stdout"), ("_deploy_stderr", "deploy:stderr")]:
                 text = getattr(self.adapter, attr, "")
