@@ -19,11 +19,11 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 RPICAM_CMD = [
     "rpicam-still",
     "--nopreview",
-    "--immediate",
+    "--autofocus-mode", "auto",
     "--output", "-",
     "--encoding", "jpg",
     "--quality", "85",
-    "--timeout", "2000",
+    "--timeout", "3000",
 ]
 
 
