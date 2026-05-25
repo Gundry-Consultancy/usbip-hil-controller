@@ -27,7 +27,7 @@ cameras:
     notes: Raspberry Pi CSI camera mounted on rpi-displays; covers microcontroller DUT displays
 
 devices:
-  # --- Display-test bench boards (monitored by android-note9 IP webcam) ---
+  # --- Display-test bench boards (monitored by csi-rpi-displays CSI camera) ---
   # Product data + ROIs sourced from tyeth/protomq PR #1 (board_calibration.json)
 
   - id: display-398
@@ -36,7 +36,7 @@ devices:
     model: RGB backlight
     pool: public
     status: available
-    camera_id: android-note9
+    camera_id: csi-rpi-displays
     qr_identifier: "https://adafru.it/398"
 
   - id: display-1028
@@ -45,7 +45,7 @@ devices:
     model: "Red/Black/White e-ink"
     pool: public
     status: available
-    camera_id: android-note9
+    camera_id: csi-rpi-displays
     qr_identifier: "https://adafru.it/1028"
 
   - id: display-2900
@@ -54,7 +54,7 @@ devices:
     model: FeatherWing OLED 128x32
     pool: public
     status: available
-    camera_id: android-note9
+    camera_id: csi-rpi-displays
     qr_identifier: "https://adafru.it/2900"
 
   - id: display-3129
@@ -63,7 +63,7 @@ devices:
     model: "0.54\" Quad alphanumeric"
     pool: public
     status: available
-    camera_id: android-note9
+    camera_id: csi-rpi-displays
     qr_identifier: "https://adafru.it/3129"
 
   - id: display-4116
@@ -72,7 +72,7 @@ devices:
     model: PyPortal
     pool: public
     status: available
-    camera_id: android-note9
+    camera_id: csi-rpi-displays
     qr_identifier: "https://adafru.it/4116"
 
   - id: display-4313
@@ -81,7 +81,7 @@ devices:
     model: "1.3\" 240x240 TFT"
     pool: public
     status: available
-    camera_id: android-note9
+    camera_id: csi-rpi-displays
     qr_identifier: "https://adafru.it/4313"
 
   - id: display-4440
@@ -90,7 +90,7 @@ devices:
     model: "Monochrome 0.91\" OLED FeatherWing"
     pool: public
     status: available
-    camera_id: android-note9
+    camera_id: csi-rpi-displays
     qr_identifier: "https://adafru.it/4440"
 
   - id: display-4650
@@ -99,7 +99,7 @@ devices:
     model: FeatherWing OLED 128x64
     pool: public
     status: available
-    camera_id: android-note9
+    camera_id: csi-rpi-displays
     qr_identifier: "https://adafru.it/4650"
 
   - id: display-4777
@@ -108,7 +108,7 @@ devices:
     model: "2.9\" Grayscale e-ink"
     pool: public
     status: available
-    camera_id: android-note9
+    camera_id: csi-rpi-displays
     qr_identifier: "https://adafru.it/4777"
 
   - id: display-4868
@@ -117,7 +117,7 @@ devices:
     model: "1.54\" Tri-color e-ink"
     pool: public
     status: available
-    camera_id: android-note9
+    camera_id: csi-rpi-displays
     qr_identifier: "https://adafru.it/4868"
 
   - id: display-5300
@@ -126,7 +126,7 @@ devices:
     model: Feather ESP32-S2 TFT
     pool: public
     status: available
-    camera_id: android-note9
+    camera_id: csi-rpi-displays
     qr_identifier: "https://adafru.it/5300"
 
   - id: display-5483
@@ -135,7 +135,7 @@ devices:
     model: Feather ESP32-S3 TFT
     pool: public
     status: available
-    camera_id: android-note9
+    camera_id: csi-rpi-displays
     qr_identifier: "https://adafru.it/5483"
 
   - id: display-5691
@@ -144,5 +144,5 @@ devices:
     model: Feather ESP32-S3 Reverse TFT
     pool: public
     status: available
-    camera_id: android-note9
+    camera_id: csi-rpi-displays
     qr_identifier: "https://adafru.it/5691"
