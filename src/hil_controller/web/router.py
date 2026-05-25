@@ -149,6 +149,29 @@ async def _aux_by_id(db_path: str, aux_id: str) -> dict | None:
     return a
 
 
+async def _cameras(db_path: str) -> list[dict]:
+    async with get_db(db_path) as db:
+        async with db.execute("SELECT * FROM cameras ORDER BY id") as cur:
+            rows = await cur.fetchall()
+    result = []
+    for r in rows:
+        c = dict(r)
+        c["streams"] = _parse_streams(c)
+        result.append(c)
+    return result
+
+
+async def _camera_by_id(db_path: str, cam_id: str) -> dict | None:
+    async with get_db(db_path) as db:
+        async with db.execute("SELECT * FROM cameras WHERE id = ?", (cam_id,)) as cur:
+            row = await cur.fetchone()
+    if row is None:
+        return None
+    c = dict(row)
+    c["streams"] = _parse_streams(c)
+    return c
+
+
 def _parse_caps(raw: str) -> list[str]:
     return [c.strip() for c in raw.split(",") if c.strip()]
 
@@ -208,7 +231,7 @@ async def dashboard(
     hosts = await _hosts(db_path)
     devices = await _devices(db_path)
     hw = await _aux_list(db_path)
-    cameras = await _aux_list(db_path, kind_filter="camera")
+    cameras = await _cameras(db_path)
 
     async with get_db(db_path) as db:
         async with db.execute(
@@ -419,7 +442,7 @@ async def edit_device_form(
     d["usb_vid"] = usb.get("vid", "")
     d["usb_pid"] = usb.get("pid", "")
     hosts = await _hosts(db_path)
-    return _tr(request, "devices_form.html", {"device": d, "hosts": hosts})
+    return _tr(request, "devices_form.html", {"device": d, "hosts": hosts, "token": hil_token})
 
 
 @router.post("/devices", response_class=HTMLResponse, include_in_schema=False)
@@ -437,6 +460,8 @@ async def create_device(
     usb_vid: Annotated[str, Form()] = "",
     usb_pid: Annotated[str, Form()] = "",
     status: Annotated[str, Form()] = "available",
+    camera_id: Annotated[str, Form()] = "",
+    qr_identifier: Annotated[str, Form()] = "",
 ) -> HTMLResponse:
     if not (await _check_web_token(request, hil_token)):
         return _login_redirect()
@@ -453,10 +478,11 @@ async def create_device(
             await db.execute(
                 """INSERT INTO devices
                    (id, host_id, kind, model, capabilities_json, usb_json,
-                    pool, status, serial_port, flasher)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    pool, status, serial_port, flasher, camera_id, qr_identifier)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (id, host_id, kind, model, json.dumps(_parse_caps(capabilities)),
-                 usb_json, pool, status, serial_port or None, flasher or None),
+                 usb_json, pool, status, serial_port or None, flasher or None,
+                 camera_id or None, qr_identifier or None),
             )
             await db.commit()
         except Exception as exc:
@@ -481,6 +507,8 @@ async def update_device(
     usb_vid: Annotated[str, Form()] = "",
     usb_pid: Annotated[str, Form()] = "",
     status: Annotated[str, Form()] = "available",
+    camera_id: Annotated[str, Form()] = "",
+    qr_identifier: Annotated[str, Form()] = "",
 ) -> HTMLResponse:
     if not (await _check_web_token(request, hil_token)):
         return _login_redirect()
@@ -492,9 +520,11 @@ async def update_device(
                 return HTMLResponse("Device not found", status_code=404)
         await db.execute(
             """UPDATE devices SET host_id=?, kind=?, model=?, capabilities_json=?,
-               usb_json=?, pool=?, status=?, serial_port=?, flasher=? WHERE id=?""",
+               usb_json=?, pool=?, status=?, serial_port=?, flasher=?,
+               camera_id=?, qr_identifier=? WHERE id=?""",
             (host_id, kind, model, json.dumps(_parse_caps(capabilities)),
-             usb_json, pool, status, serial_port or None, flasher or None, device_id),
+             usb_json, pool, status, serial_port or None, flasher or None,
+             camera_id or None, qr_identifier or None, device_id),
         )
         await db.commit()
     return _redirect("/ui/devices")
@@ -525,7 +555,7 @@ async def hardware_page(
     if not (await _check_web_token(request, hil_token)):
         return _login_redirect()
     db_path: str = request.app.state.db_path
-    hardware = [a for a in await _aux_list(db_path) if a["kind"] != "camera"]
+    hardware = await _aux_list(db_path)
     return _tr(request, "hardware.html",
                {"token": hil_token, "active": "hardware", "hardware": hardware})
 
@@ -637,7 +667,7 @@ async def delete_hardware(
 
 
 # ---------------------------------------------------------------------------
-# Cameras (aux with kind=camera)
+# Cameras CRUD (cameras table)
 # ---------------------------------------------------------------------------
 
 
@@ -648,7 +678,7 @@ async def cameras_page(
     if not (await _check_web_token(request, hil_token)):
         return _login_redirect()
     db_path: str = request.app.state.db_path
-    cameras = await _aux_list(db_path, kind_filter="camera")
+    cameras = await _cameras(db_path)
     return _tr(request, "cameras.html",
                {"token": hil_token, "active": "cameras", "cameras": cameras})
 
@@ -659,9 +689,7 @@ async def new_camera_form(
 ) -> HTMLResponse:
     if not (await _check_web_token(request, hil_token)):
         return _login_redirect()
-    db_path: str = request.app.state.db_path
-    devices = await _devices(db_path)
-    return _tr(request, "cameras_form.html", {"camera": None, "devices": devices})
+    return _tr(request, "cameras_form.html", {"camera": None})
 
 
 @router.get("/cameras/{cam_id}/form", response_class=HTMLResponse, include_in_schema=False)
@@ -671,11 +699,10 @@ async def edit_camera_form(
     if not (await _check_web_token(request, hil_token)):
         return _login_redirect()
     db_path: str = request.app.state.db_path
-    cam = await _aux_by_id(db_path, cam_id)
+    cam = await _camera_by_id(db_path, cam_id)
     if cam is None:
         return HTMLResponse("Camera not found", status_code=404)
-    devices = await _devices(db_path)
-    return _tr(request, "cameras_form.html", {"camera": cam, "devices": devices})
+    return _tr(request, "cameras_form.html", {"camera": cam})
 
 
 @router.post("/cameras", response_class=HTMLResponse, include_in_schema=False)
@@ -684,34 +711,33 @@ async def create_camera(
     hil_token: str = Cookie(default=""),
     id: Annotated[str, Form()] = "",
     model: Annotated[str, Form()] = "",
+    host_id: Annotated[str, Form()] = "",
     stream_url: Annotated[list[str], Form()] = [],
     stream_type: Annotated[list[str], Form()] = [],
     pool: Annotated[str, Form()] = "public",
     status: Annotated[str, Form()] = "available",
+    notes: Annotated[str, Form()] = "",
 ) -> Response:
     if not (await _check_web_token(request, hil_token)):
         return _login_redirect()
     db_path: str = request.app.state.db_path
     streams = [{"url": u.strip(), "type": t} for u, t in zip(stream_url, stream_type) if u.strip()]
     if not id or not streams:
-        devices = await _devices(db_path)
         return _tr(request, "cameras_form.html",
-                   {"camera": None, "devices": devices, "error": "ID and at least one stream URL are required"})
-    primary = streams[0]
+                   {"camera": None, "error": "ID and at least one stream URL are required"})
+    primary_url = streams[0]["url"]
     streams_json = json.dumps(streams)
     async with get_db(db_path) as db:
         try:
             await db.execute(
-                """INSERT INTO auxes
-                   (id, kind, model, capabilities_json, interface, observability, pool, status, streams_json)
-                   VALUES (?, 'camera', ?, '[]', ?, ?, ?, ?, ?)""",
-                (id, model, primary["url"], primary["type"], pool, status, streams_json),
+                """INSERT INTO cameras
+                   (id, host_id, source, model, pool, status, notes, streams_json)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (id, host_id or None, primary_url, model, pool, status, notes or None, streams_json),
             )
             await db.commit()
         except Exception as exc:
-            devices = await _devices(db_path)
-            return _tr(request, "cameras_form.html",
-                       {"camera": None, "devices": devices, "error": str(exc)})
+            return _tr(request, "cameras_form.html", {"camera": None, "error": str(exc)})
     return _redirect("/ui/cameras")
 
 
@@ -721,25 +747,28 @@ async def update_camera(
     cam_id: str,
     hil_token: str = Cookie(default=""),
     model: Annotated[str, Form()] = "",
+    host_id: Annotated[str, Form()] = "",
     stream_url: Annotated[list[str], Form()] = [],
     stream_type: Annotated[list[str], Form()] = [],
     pool: Annotated[str, Form()] = "public",
     status: Annotated[str, Form()] = "available",
+    notes: Annotated[str, Form()] = "",
 ) -> Response:
     if not (await _check_web_token(request, hil_token)):
         return _login_redirect()
     db_path: str = request.app.state.db_path
     streams = [{"url": u.strip(), "type": t} for u, t in zip(stream_url, stream_type) if u.strip()]
-    primary = streams[0] if streams else {"url": "", "type": "other"}
+    primary_url = streams[0]["url"] if streams else ""
     streams_json = json.dumps(streams) if streams else None
     async with get_db(db_path) as db:
-        async with db.execute("SELECT id FROM auxes WHERE id = ?", (cam_id,)) as cur:
+        async with db.execute("SELECT id FROM cameras WHERE id = ?", (cam_id,)) as cur:
             if await cur.fetchone() is None:
                 return HTMLResponse("Camera not found", status_code=404)
         await db.execute(
-            """UPDATE auxes SET model=?, interface=?, observability=?, pool=?, status=?,
-               streams_json=?, kind='camera' WHERE id=?""",
-            (model, primary["url"], primary["type"], pool, status, streams_json, cam_id),
+            """UPDATE cameras SET model=?, host_id=?, source=?, pool=?, status=?,
+               notes=?, streams_json=? WHERE id=?""",
+            (model, host_id or None, primary_url, pool, status,
+             notes or None, streams_json, cam_id),
         )
         await db.commit()
     return _redirect("/ui/cameras")
@@ -753,8 +782,8 @@ async def delete_camera(
         return _login_redirect()
     db_path: str = request.app.state.db_path
     async with get_db(db_path) as db:
-        await db.execute("DELETE FROM connections WHERE aux_id = ?", (cam_id,))
-        await db.execute("DELETE FROM auxes WHERE id = ?", (cam_id,))
+        await db.execute("DELETE FROM camera_rois WHERE camera_id = ?", (cam_id,))
+        await db.execute("DELETE FROM cameras WHERE id = ?", (cam_id,))
         await db.commit()
     return HTMLResponse("")
 

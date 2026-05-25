@@ -44,6 +44,30 @@ async def _migrate(db: aiosqlite.Connection) -> None:
     except Exception:
         pass
 
+    # camera_id: FK to cameras table; qr_identifier: QR URL for auto-ROI.
+    for col, defn in [
+        ("camera_id", "TEXT"),
+        ("qr_identifier", "TEXT"),
+    ]:
+        try:
+            await db.execute(f"ALTER TABLE devices ADD COLUMN {col} {defn}")
+            await db.commit()
+        except Exception:
+            pass
+
+    # Migrate existing auxes (kind='camera') to the cameras table.
+    try:
+        await db.execute(
+            """
+            INSERT OR IGNORE INTO cameras (id, host_id, source, model, pool, status, streams_json)
+            SELECT id, NULL, COALESCE(interface, ''), model, pool, status, streams_json
+            FROM auxes WHERE kind = 'camera'
+            """
+        )
+        await db.commit()
+    except Exception:
+        pass
+
 
 @asynccontextmanager
 async def get_db(db_path: str) -> AsyncGenerator[aiosqlite.Connection, None]:

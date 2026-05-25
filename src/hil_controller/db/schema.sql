@@ -92,6 +92,33 @@ CREATE TABLE IF NOT EXISTS connections (
     mux_channel TEXT
 );
 
+CREATE TABLE IF NOT EXISTS cameras (
+    id           TEXT PRIMARY KEY,
+    host_id      TEXT,                          -- NULL for HTTP cameras; FK to hosts.id
+    source       TEXT NOT NULL DEFAULT '',      -- "v4l2:0" or primary HTTP URL
+    model        TEXT NOT NULL DEFAULT '',
+    resolution_w INTEGER,
+    resolution_h INTEGER,
+    fps          REAL,
+    pool         TEXT NOT NULL DEFAULT 'public',
+    status       TEXT NOT NULL DEFAULT 'available',
+    notes        TEXT,
+    streams_json TEXT                           -- [{url, type}, ...] for multi-stream
+);
+
+-- Per-device ROI in camera pixel space; admin-editable without a git commit
+CREATE TABLE IF NOT EXISTS camera_rois (
+    device_id   TEXT PRIMARY KEY,
+    camera_id   TEXT NOT NULL REFERENCES cameras(id),
+    x           INTEGER NOT NULL,
+    y           INTEGER NOT NULL,
+    w           INTEGER NOT NULL,
+    h           INTEGER NOT NULL,
+    source      TEXT NOT NULL DEFAULT 'manual', -- 'qr_auto' | 'yellow_box' | 'manual'
+    confidence  REAL,
+    updated_at  TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS assets (
     id          TEXT PRIMARY KEY,
     filename    TEXT NOT NULL,

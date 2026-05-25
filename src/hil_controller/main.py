@@ -69,6 +69,7 @@ def create_app(db_path: str | None = None, topology_file: str | None = None) -> 
     from fastapi.staticfiles import StaticFiles
 
     from hil_controller.api.aux import router as aux_router
+    from hil_controller.api.cameras import router as cameras_router
     from hil_controller.api.devices import router as devices_router
     from hil_controller.api.health import router as health_router
     from hil_controller.api.hosts import router as hosts_router
@@ -81,6 +82,7 @@ def create_app(db_path: str | None = None, topology_file: str | None = None) -> 
     app.include_router(hosts_router)
     app.include_router(devices_router)
     app.include_router(aux_router)
+    app.include_router(cameras_router)
     app.include_router(topology_router)
     app.include_router(web_router)
 

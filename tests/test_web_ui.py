@@ -331,10 +331,12 @@ async def test_create_camera_multi_stream(client):
     assert r.status_code == 200
     assert r.headers.get("HX-Redirect") == "/ui/cameras"
 
-    # verify both streams stored
-    cams = await client.get("/v1/aux/cam-multi-01",
+    # verify both streams stored in the cameras table
+    cams = await client.get("/v1/cameras/cam-multi-01",
                             headers={"Authorization": f"Bearer {TOKEN}"})
     assert cams.status_code == 200
+    data = cams.json()
+    assert len(data["streams"]) == 2
 
 
 @pytest.mark.asyncio

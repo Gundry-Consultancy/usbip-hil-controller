@@ -24,6 +24,7 @@ async def seed_topology(db_path: str, topology_file: str) -> None:
     hosts = data.get("hosts", [])
     devices = data.get("devices", [])
     auxes = data.get("auxes", [])
+    cameras = data.get("cameras", [])
     connections = data.get("connections", [])
 
     async with aiosqlite.connect(db_path) as db:
@@ -56,13 +57,40 @@ async def seed_topology(db_path: str, topology_file: str) -> None:
                 ),
             )
 
+        for cam in cameras:
+            await db.execute(
+                """
+                INSERT INTO cameras
+                    (id, host_id, source, model, resolution_w, resolution_h, fps,
+                     pool, status, notes)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    host_id=excluded.host_id, source=excluded.source,
+                    model=excluded.model,
+                    resolution_w=excluded.resolution_w, resolution_h=excluded.resolution_h,
+                    fps=excluded.fps, pool=excluded.pool, notes=excluded.notes
+                """,
+                (
+                    cam["id"],
+                    cam.get("host_id"),
+                    cam.get("source", ""),
+                    cam.get("model", ""),
+                    cam.get("resolution", [None, None])[0],
+                    cam.get("resolution", [None, None])[1],
+                    cam.get("fps"),
+                    cam.get("pool", "public"),
+                    cam.get("status", "available"),
+                    cam.get("notes"),
+                ),
+            )
+
         for d in devices:
             await db.execute(
                 """
                 INSERT INTO devices
                     (id, host_id, kind, model, capabilities_json, usb_json,
-                     pool, status, serial_port, flasher)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     pool, status, serial_port, flasher, camera_id, qr_identifier)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     host_id=excluded.host_id, kind=excluded.kind,
                     model=excluded.model,
@@ -70,7 +98,9 @@ async def seed_topology(db_path: str, topology_file: str) -> None:
                     usb_json=excluded.usb_json,
                     pool=excluded.pool,
                     serial_port=excluded.serial_port,
-                    flasher=excluded.flasher
+                    flasher=excluded.flasher,
+                    camera_id=excluded.camera_id,
+                    qr_identifier=excluded.qr_identifier
                 """,
                 (
                     d["id"],
@@ -83,6 +113,8 @@ async def seed_topology(db_path: str, topology_file: str) -> None:
                     d.get("status", "available"),
                     d.get("serial_port"),
                     d.get("flasher"),
+                    d.get("camera_id"),
+                    d.get("qr_identifier"),
                 ),
             )
 
@@ -124,9 +156,10 @@ async def seed_topology(db_path: str, topology_file: str) -> None:
         await db.commit()
 
     log.info(
-        "Seeded %d hosts, %d devices, %d auxes from %s",
+        "Seeded %d hosts, %d devices, %d auxes, %d cameras from %s",
         len(hosts),
         len(devices),
         len(auxes),
+        len(cameras),
         path,
     )

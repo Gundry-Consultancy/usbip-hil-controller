@@ -65,7 +65,61 @@
           {% endfor %}
         </select>
       </div>
+      <div class="form-group">
+        <label for="f-dev-camera">Camera ID</label>
+        <input type="text" id="f-dev-camera" name="camera_id" value="{{ device.camera_id or '' if device else '' }}" placeholder="ip-webcam-android, csi-rpi-displays, …">
+        <span class="form-hint">Leave blank if no camera monitors this device</span>
+      </div>
+      <div class="form-group">
+        <label for="f-dev-qr">QR Identifier</label>
+        <input type="text" id="f-dev-qr" name="qr_identifier" value="{{ device.qr_identifier or '' if device else '' }}" placeholder="https://adafru.it/5300">
+        <span class="form-hint">QR code URL printed on the board (for auto-ROI detection)</span>
+      </div>
     </div>
+
+    {% if device and device.camera_id %}
+    <hr class="section-sep">
+    <h2>Camera Panel</h2>
+    <div style="display:flex;gap:1rem;flex-wrap:wrap;align-items:flex-start;margin-bottom:1rem;">
+      <div>
+        <p style="margin:0 0 0.5rem;font-size:0.85rem;color:#555;">Live snapshot (auto-refreshes every 5 s)</p>
+        <img id="cam-snap-{{ device.id }}"
+             src="/v1/devices/{{ device.id }}/camera/snapshot"
+             alt="device snapshot"
+             style="max-width:320px;border-radius:6px;border:1px solid #ddd;"
+             hx-get="/v1/devices/{{ device.id }}/camera/snapshot"
+             hx-trigger="every 5s"
+             hx-swap="outerHTML"
+             onerror="this.alt='Snapshot unavailable'">
+      </div>
+      <div style="min-width:200px;">
+        <p style="margin:0 0 0.5rem;font-size:0.85rem;color:#555;">
+          Camera: <strong>{{ device.camera_id }}</strong><br>
+          {% if device.qr_identifier %}QR: <code style="font-size:0.75rem;">{{ device.qr_identifier }}</code>{% endif %}
+        </p>
+        <div id="cam-roi-status-{{ device.id }}"
+             hx-get="/v1/devices/{{ device.id }}/camera"
+             hx-trigger="load"
+             hx-swap="innerHTML">
+          Loading ROI…
+        </div>
+        <div style="margin-top:0.75rem;display:flex;gap:0.5rem;flex-wrap:wrap;">
+          <button type="button" class="btn btn-sm btn-outline"
+            hx-post="/v1/devices/{{ device.id }}/camera/calibrate/save"
+            hx-target="#cam-roi-status-{{ device.id }}"
+            hx-headers='{"Authorization": "Bearer {{ token }}"}'
+            hx-swap="innerHTML">Re-detect QR</button>
+          <button type="button" class="btn btn-sm btn-danger"
+            hx-delete="/v1/devices/{{ device.id }}/camera/roi"
+            hx-target="#cam-roi-status-{{ device.id }}"
+            hx-headers='{"Authorization": "Bearer {{ token }}"}'
+            hx-confirm="Clear manual ROI for {{ device.id }}?"
+            hx-swap="innerHTML">Clear ROI</button>
+        </div>
+      </div>
+    </div>
+    {% endif %}
+
     <div class="form-actions">
       <button type="submit" class="btn btn-primary">{% if device %}Save Changes{% else %}Create Device{% endif %}</button>
       <button type="button" class="btn btn-secondary"
