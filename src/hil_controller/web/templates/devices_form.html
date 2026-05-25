@@ -104,11 +104,13 @@
           Loading ROI…
         </div>
         <div style="margin-top:0.75rem;display:flex;gap:0.5rem;flex-wrap:wrap;">
+          {% if device.qr_identifier %}
           <button type="button" class="btn btn-sm btn-outline"
             hx-post="/v1/devices/{{ device.id }}/camera/calibrate/save"
             hx-target="#cam-roi-status-{{ device.id }}"
             hx-headers='{"Authorization": "Bearer {{ token }}"}'
             hx-swap="innerHTML">Re-detect QR</button>
+          {% endif %}
           <button type="button" class="btn btn-sm btn-danger"
             hx-delete="/v1/devices/{{ device.id }}/camera/roi"
             hx-target="#cam-roi-status-{{ device.id }}"
@@ -116,6 +118,18 @@
             hx-confirm="Clear manual ROI for {{ device.id }}?"
             hx-swap="innerHTML">Clear ROI</button>
         </div>
+
+        <hr style="margin:0.75rem 0;border-color:#eee;">
+        <p style="font-size:0.8rem;color:#555;margin:0 0 0.4rem;">Set ROI manually (pixels in camera frame):</p>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.3rem 0.5rem;margin-bottom:0.5rem;" id="roi-fields-{{ device.id }}">
+          <label style="font-size:0.8rem;">x <input type="number" id="roi-x-{{ device.id }}" min="0" style="width:4rem;font-size:0.8rem;" placeholder="0"></label>
+          <label style="font-size:0.8rem;">y <input type="number" id="roi-y-{{ device.id }}" min="0" style="width:4rem;font-size:0.8rem;" placeholder="0"></label>
+          <label style="font-size:0.8rem;">w <input type="number" id="roi-w-{{ device.id }}" min="1" style="width:4rem;font-size:0.8rem;" placeholder="320"></label>
+          <label style="font-size:0.8rem;">h <input type="number" id="roi-h-{{ device.id }}" min="1" style="width:4rem;font-size:0.8rem;" placeholder="240"></label>
+        </div>
+        <button type="button" class="btn btn-sm btn-primary"
+          onclick="saveRoi('{{ device.id }}', '{{ token }}')"
+          >Save ROI</button>
       </div>
     </div>
     {% endif %}
@@ -127,3 +141,27 @@
     </div>
   </form>
 </div>
+
+<script>
+async function saveRoi(deviceId, token) {
+  const g = id => parseInt(document.getElementById(id).value, 10);
+  const x = g('roi-x-' + deviceId), y = g('roi-y-' + deviceId);
+  const w = g('roi-w-' + deviceId), h = g('roi-h-' + deviceId);
+  if ([x,y,w,h].some(isNaN) || w < 1 || h < 1) {
+    alert('Enter valid x, y, w, h values (w and h must be ≥ 1).');
+    return;
+  }
+  const r = await fetch('/v1/devices/' + deviceId + '/camera/roi', {
+    method: 'PUT',
+    headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token},
+    body: JSON.stringify({x, y, w, h}),
+  });
+  const el = document.getElementById('cam-roi-status-' + deviceId);
+  if (r.ok) {
+    const d = await r.json();
+    el.textContent = 'ROI set: x=' + d.x + ' y=' + d.y + ' w=' + d.w + ' h=' + d.h + ' (manual)';
+  } else {
+    el.textContent = 'Error: ' + (await r.text());
+  }
+}
+</script>
