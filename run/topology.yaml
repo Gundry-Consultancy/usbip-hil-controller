@@ -74,11 +74,11 @@ cameras:
 
   - id: csi-rpi-displays
     host_id: rpi-displays
-    source: v4l2:0
+    source: http://192.168.1.234:8080/
     model: CSI Camera (rpi-displays)
     pool: public
     status: available
-    notes: Raspberry Pi CSI camera mounted on rpi-displays; covers microcontroller DUT displays
+    notes: Raspberry Pi CSI camera on rpi-displays; served by tools/camera-server/snapshot_server.py on :8080
 
 devices:
   # --- WipperSnapper Python SBC fleet (monitored by android-note9 IP webcam) ---
