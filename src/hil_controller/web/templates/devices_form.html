@@ -84,13 +84,9 @@
       <div>
         <p style="margin:0 0 0.5rem;font-size:0.85rem;color:#555;">Live snapshot (auto-refreshes every 5 s)</p>
         <img id="cam-snap-{{ device.id }}"
-             src="/v1/devices/{{ device.id }}/camera/snapshot"
-             alt="device snapshot"
-             style="max-width:320px;border-radius:6px;border:1px solid #ddd;"
-             hx-get="/v1/devices/{{ device.id }}/camera/snapshot"
-             hx-trigger="every 5s"
-             hx-swap="outerHTML"
-             onerror="this.alt='Snapshot unavailable'">
+             src="/ui/devices/{{ device.id }}/snapshot"
+             alt="Snapshot unavailable"
+             style="max-width:320px;border-radius:6px;border:1px solid #ddd;">
       </div>
       <div style="min-width:200px;">
         <p style="margin:0 0 0.5rem;font-size:0.85rem;color:#555;">
@@ -137,6 +133,16 @@
 </div>
 
 <script>
+(function() {
+  var snapId = 'cam-snap-{{ device.id if device else "" }}';
+  var snapEl = document.getElementById(snapId);
+  if (snapEl) {
+    setInterval(function() {
+      snapEl.src = '/ui/devices/{{ device.id if device else "" }}/snapshot?_t=' + Date.now();
+    }, 5000);
+  }
+})();
+
 function _roiEl(deviceId) { return document.getElementById('cam-roi-status-' + deviceId); }
 function _roiText(d) { return 'ROI: x=' + d.x + ' y=' + d.y + ' w=' + d.w + ' h=' + d.h + ' (' + (d.source||'manual') + ')'; }
 

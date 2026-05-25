@@ -450,6 +450,62 @@ async def edit_device_form(
     return _tr(request, "devices_form.html", {"device": d, "hosts": hosts, "token": hil_token, "roi": roi})
 
 
+@router.get("/devices/{device_id}/snapshot", include_in_schema=False)
+async def device_snapshot_proxy(
+    request: Request, device_id: str, hil_token: str = Cookie(default="")
+) -> Response:
+    """Cookie-authed JPEG proxy for the device camera panel img src."""
+    if not (await _check_web_token(request, hil_token)):
+        return Response(status_code=401)
+    db_path: str = request.app.state.db_path
+    async with get_db(db_path) as db:
+        async with db.execute(
+            "SELECT d.camera_id, r.x, r.y, r.w, r.h, c.source, c.streams_json "
+            "FROM devices d "
+            "LEFT JOIN camera_rois r ON r.device_id = d.id "
+            "LEFT JOIN cameras c ON c.id = d.camera_id "
+            "WHERE d.id = ?",
+            (device_id,),
+        ) as cur:
+            row = await cur.fetchone()
+    if row is None or not row["camera_id"]:
+        return Response(status_code=404)
+
+    streams = json.loads(row["streams_json"]) if row["streams_json"] else []
+    if not streams and row["source"]:
+        streams = [{"url": row["source"], "type": "snapshot"}]
+    url = next((s["url"] for s in streams if s.get("type") in ("snapshot", "mjpeg")), row["source"] or "")
+    if not url:
+        return Response(status_code=503)
+
+    try:
+        import httpx
+
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(url)
+            resp.raise_for_status()
+            frame_bytes = resp.content
+    except Exception:
+        return Response(status_code=503)
+
+    if row["x"] is not None:
+        try:
+            import cv2
+            import numpy as np
+
+            arr = np.frombuffer(frame_bytes, dtype=np.uint8)
+            img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+            if img is not None:
+                x, y, w, h = int(row["x"]), int(row["y"]), int(row["w"]), int(row["h"])
+                crop = img[y : y + h, x : x + w]
+                _, buf = cv2.imencode(".jpg", crop)
+                return Response(content=buf.tobytes(), media_type="image/jpeg")
+        except ImportError:
+            pass
+
+    return Response(content=frame_bytes, media_type="image/jpeg")
+
+
 @router.post("/devices", response_class=HTMLResponse, include_in_schema=False)
 async def create_device(
     request: Request,
