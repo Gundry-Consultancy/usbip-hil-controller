@@ -5,3 +5,4 @@
 - [Working conventions](feedback_conventions.md) — commit style, TDD, no emojis, memories in repo
 - [Deployment](project_deployment.md) — Tachyon controller host, bench hosts, camera topology
 - [Camera integration](project_camera_integration.md) — plan to port protomq PR #1 camera tools into controller
+- [SSH via Windows OpenSSH](feedback_ssh_openssh.md) — use /c/Windows/System32/OpenSSH/ssh.exe, not Git Bash ssh
