@@ -59,6 +59,11 @@ class Scheduler:
 
     async def _run_job(self, job_id: str) -> None:
         from hil_controller.db.connection import get_db, get_job, update_job_state
+        from hil_controller.queue.leases import (
+            LeaseConflict,
+            acquire as acquire_lease,
+            release as release_lease,
+        )
         from hil_controller.queue.worker import JobWorker
 
         adapter = await self._resolve_adapter(job_id)
@@ -71,6 +76,24 @@ class Scheduler:
         import json
 
         request = json.loads(row["request_json"])
+
+        # Acquire an exclusive_device lease if the adapter resolved a device.
+        # The scheduler is single-process so the in-memory semaphore is the
+        # primary concurrency guard; the lease is durable + auditable + the
+        # signal used by passive USB-ID learn (PR4).
+        lease_id: int | None = None
+        assigned_device = row.get("assigned_device")
+        if assigned_device:
+            try:
+                lease = await acquire_lease(
+                    self.db_path,
+                    kind="exclusive_device",
+                    device_id=assigned_device,
+                    job_id=job_id,
+                )
+                lease_id = lease["id"]
+            except LeaseConflict as exc:
+                log.warning("could not acquire lease for job %s: %s", job_id, exc)
 
         worker = JobWorker(
             job_id=job_id,
@@ -86,6 +109,11 @@ class Scheduler:
         try:
             await worker.run()
         finally:
+            if lease_id is not None:
+                try:
+                    await release_lease(self.db_path, lease_id)
+                except Exception as exc:
+                    log.warning("release_lease failed for job %s: %s", job_id, exc)
             self._active.pop(job_id, None)
             self.event_bus.cleanup(job_id)
 

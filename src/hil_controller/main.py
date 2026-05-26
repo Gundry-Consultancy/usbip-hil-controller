@@ -23,11 +23,13 @@ def create_app(db_path: str | None = None, topology_file: str | None = None) -> 
     async def lifespan(app: FastAPI):
         from hil_controller.db.connection import init_db
         from hil_controller.queue.events import EventBus
+        from hil_controller.queue.leases import startup_sweep
         from hil_controller.queue.scheduler import Scheduler
         from hil_controller.topology.seeder import seed_topology
 
         await init_db(_db_path)
         await seed_topology(_db_path, _topology_file)
+        await startup_sweep(_db_path)
 
         event_bus = EventBus()
 
@@ -74,6 +76,7 @@ def create_app(db_path: str | None = None, topology_file: str | None = None) -> 
     from hil_controller.api.health import router as health_router
     from hil_controller.api.hosts import router as hosts_router
     from hil_controller.api.jobs import router as jobs_router
+    from hil_controller.api.leases import router as leases_router
     from hil_controller.api.topology import router as topology_router
     from hil_controller.web.router import router as web_router
 
@@ -84,6 +87,7 @@ def create_app(db_path: str | None = None, topology_file: str | None = None) -> 
     app.include_router(aux_router)
     app.include_router(cameras_router)
     app.include_router(topology_router)
+    app.include_router(leases_router)
     app.include_router(web_router)
 
     _static = Path(__file__).parent / "web" / "static"

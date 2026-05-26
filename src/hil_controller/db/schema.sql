@@ -99,6 +99,22 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_device_usb_ids_combo
 CREATE INDEX IF NOT EXISTS idx_device_usb_ids_lookup ON device_usb_ids(vid, pid);
 CREATE INDEX IF NOT EXISTS idx_device_usb_ids_device ON device_usb_ids(device_id);
 
+-- Exclusivity leases on devices / hubs. Acquired by jobs and learn-mode runs.
+CREATE TABLE IF NOT EXISTS device_leases (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    device_id     TEXT REFERENCES devices(id) ON DELETE CASCADE,
+    hub_host_id   TEXT,
+    job_id        TEXT,
+    kind          TEXT NOT NULL,    -- exclusive_device | exclusive_hub
+    acquired_at   TEXT NOT NULL,
+    expires_at    TEXT,
+    released_at   TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_device_leases_active_dev
+    ON device_leases(device_id) WHERE released_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_device_leases_active_hub
+    ON device_leases(hub_host_id) WHERE released_at IS NULL;
+
 CREATE TABLE IF NOT EXISTS auxes (
     id                  TEXT PRIMARY KEY,
     kind                TEXT NOT NULL DEFAULT '',

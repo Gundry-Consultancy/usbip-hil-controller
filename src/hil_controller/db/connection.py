@@ -157,6 +157,34 @@ async def _migrate(db: aiosqlite.Connection) -> None:
     except Exception:
         pass
 
+    # Device/hub exclusivity leases.
+    try:
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS device_leases (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                device_id     TEXT REFERENCES devices(id) ON DELETE CASCADE,
+                hub_host_id   TEXT,
+                job_id        TEXT,
+                kind          TEXT NOT NULL,
+                acquired_at   TEXT NOT NULL,
+                expires_at    TEXT,
+                released_at   TEXT
+            )
+            """
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_device_leases_active_dev "
+            "ON device_leases(device_id) WHERE released_at IS NULL"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_device_leases_active_hub "
+            "ON device_leases(hub_host_id) WHERE released_at IS NULL"
+        )
+        await db.commit()
+    except Exception:
+        pass
+
 
 async def _backfill_usb_ids(db: aiosqlite.Connection) -> None:
     """Copy single-{vid,pid} usb_json rows into device_usb_ids if not already present."""
