@@ -119,6 +119,23 @@ CREATE TABLE IF NOT EXISTS camera_rois (
     updated_at  TEXT NOT NULL
 );
 
+-- Physical peripheral hardware attached to DUTs (displays, sensors, etc.)
+CREATE TABLE IF NOT EXISTS peripherals (
+    id          TEXT PRIMARY KEY,
+    kind        TEXT NOT NULL DEFAULT 'display',   -- display | sensor | actuator | ...
+    model       TEXT NOT NULL DEFAULT '',
+    product_url TEXT,                              -- e.g. https://adafru.it/5483
+    specs_json  TEXT,                              -- {"resolution": "240x135", ...}
+    notes       TEXT
+);
+
+-- Many-to-many: which peripherals are attached to which DUT
+CREATE TABLE IF NOT EXISTS device_peripherals (
+    device_id     TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+    peripheral_id TEXT NOT NULL REFERENCES peripherals(id) ON DELETE CASCADE,
+    PRIMARY KEY (device_id, peripheral_id)
+);
+
 CREATE TABLE IF NOT EXISTS assets (
     id          TEXT PRIMARY KEY,
     filename    TEXT NOT NULL,

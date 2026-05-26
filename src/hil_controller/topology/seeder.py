@@ -26,6 +26,7 @@ async def seed_topology(db_path: str, topology_file: str) -> None:
     auxes = data.get("auxes", [])
     cameras = data.get("cameras", [])
     connections = data.get("connections", [])
+    peripherals = data.get("peripherals", [])
 
     async with aiosqlite.connect(db_path) as db:
         await db.execute("PRAGMA foreign_keys=OFF")
@@ -144,6 +145,39 @@ async def seed_topology(db_path: str, topology_file: str) -> None:
                 ),
             )
 
+        for p in peripherals:
+            await db.execute(
+                """
+                INSERT INTO peripherals
+                    (id, kind, model, product_url, specs_json, notes)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    kind=excluded.kind, model=excluded.model,
+                    product_url=excluded.product_url,
+                    specs_json=excluded.specs_json,
+                    notes=excluded.notes
+                """,
+                (
+                    p["id"],
+                    p.get("kind", "display"),
+                    p.get("model", ""),
+                    p.get("product_url"),
+                    json.dumps(p["specs"]) if "specs" in p else None,
+                    p.get("notes"),
+                ),
+            )
+
+        # Seed device→peripheral associations from peripheral_ids on each device.
+        for d in devices:
+            for pid in d.get("peripheral_ids", []):
+                await db.execute(
+                    """
+                    INSERT OR IGNORE INTO device_peripherals (device_id, peripheral_id)
+                    VALUES (?, ?)
+                    """,
+                    (d["id"], pid),
+                )
+
         if connections:
             await db.execute("DELETE FROM connections")
             for c in connections:
@@ -156,10 +190,11 @@ async def seed_topology(db_path: str, topology_file: str) -> None:
         await db.commit()
 
     log.info(
-        "Seeded %d hosts, %d devices, %d auxes, %d cameras from %s",
+        "Seeded %d hosts, %d devices, %d auxes, %d cameras, %d peripherals from %s",
         len(hosts),
         len(devices),
         len(auxes),
         len(cameras),
+        len(peripherals),
         path,
     )

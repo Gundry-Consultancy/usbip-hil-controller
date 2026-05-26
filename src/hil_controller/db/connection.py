@@ -55,6 +55,38 @@ async def _migrate(db: aiosqlite.Connection) -> None:
         except Exception:
             pass
 
+    # peripherals + device_peripherals — added alongside topology peripherals section.
+    try:
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS peripherals (
+                id          TEXT PRIMARY KEY,
+                kind        TEXT NOT NULL DEFAULT 'display',
+                model       TEXT NOT NULL DEFAULT '',
+                product_url TEXT,
+                specs_json  TEXT,
+                notes       TEXT
+            )
+            """
+        )
+        await db.commit()
+    except Exception:
+        pass
+
+    try:
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS device_peripherals (
+                device_id     TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+                peripheral_id TEXT NOT NULL REFERENCES peripherals(id) ON DELETE CASCADE,
+                PRIMARY KEY (device_id, peripheral_id)
+            )
+            """
+        )
+        await db.commit()
+    except Exception:
+        pass
+
     # Migrate existing auxes (kind='camera') to the cameras table.
     try:
         await db.execute(

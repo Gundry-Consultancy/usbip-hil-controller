@@ -168,9 +168,32 @@ async def test_topology_graph_returns_full_graph(seeded_client):
     assert "devices" in body
     assert "auxes" in body
     assert "connections" in body
+    assert "peripherals" in body
     assert len(body["hosts"]) == 2
     assert len(body["devices"]) == 2
     assert len(body["auxes"]) == 1
+    assert len(body["peripherals"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_topology_device_includes_peripheral_ids(seeded_client):
+    r = await seeded_client.get("/v1/topology")
+    assert r.status_code == 200
+    body = r.json()
+    qtpy = next(d for d in body["devices"] if d["id"] == "fake-qtpy-01")
+    assert "peripheral_ids" in qtpy
+    assert "fake-oled-periph-01" in qtpy["peripheral_ids"]
+
+
+@pytest.mark.asyncio
+async def test_topology_peripheral_fields(seeded_client):
+    r = await seeded_client.get("/v1/topology")
+    assert r.status_code == 200
+    body = r.json()
+    periph = next(p for p in body["peripherals"] if p["id"] == "fake-oled-periph-01")
+    assert periph["kind"] == "display"
+    assert periph["model"] == "OLED 128x32"
+    assert periph["product_url"] == "https://adafru.it/2900"
 
 
 @pytest.mark.asyncio

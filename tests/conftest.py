@@ -89,6 +89,7 @@ devices:
     capabilities: [spi, i2c]
     pool: public
     status: available
+    peripheral_ids: [fake-oled-periph-01]
 
 auxes:
   - id: fake-oled-01
@@ -99,6 +100,13 @@ auxes:
     observability: camera
     pool: public
     status: available
+
+peripherals:
+  - id: fake-oled-periph-01
+    kind: display
+    model: "OLED 128x32"
+    product_url: "https://adafru.it/2900"
+    notes: "Monochrome OLED FeatherWing 128x32"
 
 connections:
   - aux: fake-oled-01

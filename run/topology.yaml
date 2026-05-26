@@ -1,5 +1,7 @@
 # run/topology.yaml — Tachyon HIL controller bench topology
-# Generated from protomq PR #1 (tyeth/protomq@5964cf1) board data.
+# Corrected from protomq PR #1 (tyeth/protomq@5964cf1) board data.
+# Devices represent the MCU DUTs running WipperSnapper firmware.
+# Peripherals section catalogs attached display hardware.
 
 hosts:
   - id: rpi-displays
@@ -80,6 +82,88 @@ cameras:
     status: available
     notes: Raspberry Pi CSI camera on rpi-displays; served by tools/camera-server/snapshot_server.py on :8080
 
+peripherals:
+  # Display hardware tested on the display bench.
+  # Each peripheral is attached to (or integrated into) an MCU DUT.
+
+  - id: periph-rgb-lcd-16x2
+    kind: display
+    model: "RGB Backlight Positive LCD 16x2"
+    product_url: "https://adafru.it/398"
+    notes: "16x2 character LCD with positive RGB backlight; I2C/parallel interface"
+
+  - id: periph-eink-29-rbw
+    kind: display
+    model: "2.9in Red/Black/White eInk Breakout"
+    product_url: "https://adafru.it/1028"
+    notes: "Tri-color 2.9in eInk display breakout board; SPI interface"
+
+  - id: periph-oled-fw-128x32
+    kind: display
+    model: "OLED FeatherWing 128x32"
+    product_url: "https://adafru.it/2900"
+    notes: "128x32 monochrome OLED FeatherWing; I2C interface; SSD1306 driver"
+
+  - id: periph-alpha-fw-quad-green
+    kind: display
+    model: "0.54in Quad Alphanumeric FeatherWing (Green)"
+    product_url: "https://adafru.it/3129"
+    notes: "Quad 14-segment alphanumeric display FeatherWing; I2C/HT16K33 driver"
+
+  - id: periph-pyportal-tft
+    kind: display
+    model: "PyPortal Integrated TFT (320x240)"
+    product_url: "https://adafru.it/4116"
+    notes: "3.2in 320x240 TFT display integrated into PyPortal board; ILI9341 driver"
+
+  - id: periph-tft-13-240x240
+    kind: display
+    model: "1.3in 240x240 TFT LCD Breakout"
+    product_url: "https://adafru.it/4313"
+    notes: "1.3in 240x240 color TFT LCD breakout; SPI/ST7789 driver"
+
+  - id: periph-oled-091-stemma
+    kind: display
+    model: "0.91in 128x32 Monochrome OLED (STEMMA QT)"
+    product_url: "https://adafru.it/4440"
+    notes: "0.91in 128x32 monochrome OLED breakout with STEMMA QT; I2C/SSD1306 driver"
+
+  - id: periph-oled-fw-128x64
+    kind: display
+    model: "OLED FeatherWing 128x64 (STEMMA QT)"
+    product_url: "https://adafru.it/4650"
+    notes: "128x64 monochrome OLED FeatherWing with STEMMA QT; I2C/SSD1306 driver"
+
+  - id: periph-eink-29-gray-fw
+    kind: display
+    model: "2.9in Grayscale eInk FeatherWing"
+    product_url: "https://adafru.it/4777"
+    notes: "2.9in grayscale eInk display FeatherWing; SPI interface"
+
+  - id: periph-eink-154-tricolor
+    kind: display
+    model: "1.54in Tri-Color eInk 200x200"
+    product_url: "https://adafru.it/4868"
+    notes: "1.54in tri-color (red/black/white) eInk display breakout; SPI interface"
+
+  - id: periph-feather-esp32s2-tft-display
+    kind: display
+    model: "Feather ESP32-S2 TFT Integrated Display (240x135)"
+    product_url: "https://adafru.it/5300"
+    notes: "1.14in 240x135 color TFT integrated into Feather ESP32-S2 TFT board; SPI/ST7789 driver"
+
+  - id: periph-feather-esp32s3-tft-display
+    kind: display
+    model: "Feather ESP32-S3 TFT Integrated Display (240x135)"
+    product_url: "https://adafru.it/5483"
+    notes: "1.14in 240x135 color TFT integrated into Feather ESP32-S3 TFT board; SPI/ST7789 driver"
+
+  - id: periph-feather-esp32s3-revtft-display
+    kind: display
+    model: "Feather ESP32-S3 Reverse TFT Integrated Display (240x135)"
+    product_url: "https://adafru.it/5691"
+    notes: "1.14in 240x135 color TFT (reverse-mounted) integrated into Feather ESP32-S3 Reverse TFT board; SPI/ST7789 driver"
+
 devices:
   # --- WipperSnapper Python SBC fleet (monitored by android-note9 IP webcam) ---
 
@@ -137,122 +221,150 @@ devices:
     status: available
     camera_id: android-note9
 
-  # --- Display-test bench boards (monitored by csi-rpi-displays CSI camera) ---
-  # Product data + ROIs sourced from tyeth/protomq PR #1 (board_calibration.json)
+  # --- WipperSnapper Arduino display-test bench (monitored by csi-rpi-displays CSI camera) ---
+  # Each device is an MCU board running WipperSnapper Arduino firmware.
+  # Product QR identifier refers to the display peripheral product page.
+  # ROI calibration data sourced from tyeth/protomq PR #1 (board_calibration.json).
 
-  - id: display-398
+  - id: mcu-feather-lcd-16x2
     host_id: rpi-displays
     kind: microcontroller
-    model: RGB backlight
+    model: "Feather M4 Express"
     pool: public
+    capabilities: [arduino, wippersnapper, i2c]
     status: available
     camera_id: csi-rpi-displays
     qr_identifier: "https://adafru.it/398"
+    peripheral_ids: [periph-rgb-lcd-16x2]
 
-  - id: display-1028
+  - id: mcu-feather-eink-29-rbw
     host_id: rpi-displays
     kind: microcontroller
-    model: "Red/Black/White e-ink"
+    model: "Feather M4 Express"
     pool: public
+    capabilities: [arduino, wippersnapper, spi]
     status: available
     camera_id: csi-rpi-displays
     qr_identifier: "https://adafru.it/1028"
+    peripheral_ids: [periph-eink-29-rbw]
 
-  - id: display-2900
+  - id: mcu-feather-oled-fw-128x32
     host_id: rpi-displays
     kind: microcontroller
-    model: FeatherWing OLED 128x32
+    model: "Feather M4 Express"
     pool: public
+    capabilities: [arduino, wippersnapper, i2c]
     status: available
     camera_id: csi-rpi-displays
     qr_identifier: "https://adafru.it/2900"
+    peripheral_ids: [periph-oled-fw-128x32]
 
-  - id: display-3129
+  - id: mcu-feather-alpha-fw-quad
     host_id: rpi-displays
     kind: microcontroller
-    model: "0.54\" Quad alphanumeric"
+    model: "Feather M4 Express"
     pool: public
+    capabilities: [arduino, wippersnapper, i2c]
     status: available
     camera_id: csi-rpi-displays
     qr_identifier: "https://adafru.it/3129"
+    peripheral_ids: [periph-alpha-fw-quad-green]
 
-  - id: display-4116
+  - id: mcu-pyportal
     host_id: rpi-displays
     kind: microcontroller
-    model: PyPortal
+    model: "PyPortal"
     pool: public
+    capabilities: [arduino, wippersnapper, spi, i2c, tft-display, wifi]
     status: available
     camera_id: csi-rpi-displays
     qr_identifier: "https://adafru.it/4116"
+    peripheral_ids: [periph-pyportal-tft]
 
-  - id: display-4313
+  - id: mcu-feather-tft-13-240
     host_id: rpi-displays
     kind: microcontroller
-    model: "1.3\" 240x240 TFT"
+    model: "Feather M4 Express"
     pool: public
+    capabilities: [arduino, wippersnapper, spi]
     status: available
     camera_id: csi-rpi-displays
     qr_identifier: "https://adafru.it/4313"
+    peripheral_ids: [periph-tft-13-240x240]
 
-  - id: display-4440
+  - id: mcu-feather-oled-091-stemma
     host_id: rpi-displays
     kind: microcontroller
-    model: "Monochrome 0.91\" OLED FeatherWing"
+    model: "Feather M4 Express"
     pool: public
+    capabilities: [arduino, wippersnapper, i2c]
     status: available
     camera_id: csi-rpi-displays
     qr_identifier: "https://adafru.it/4440"
+    peripheral_ids: [periph-oled-091-stemma]
 
-  - id: display-4650
+  - id: mcu-feather-oled-fw-128x64
     host_id: rpi-displays
     kind: microcontroller
-    model: FeatherWing OLED 128x64
+    model: "Feather M4 Express"
     pool: public
+    capabilities: [arduino, wippersnapper, i2c]
     status: available
     camera_id: csi-rpi-displays
     qr_identifier: "https://adafru.it/4650"
+    peripheral_ids: [periph-oled-fw-128x64]
 
-  - id: display-4777
+  - id: mcu-feather-eink-29-gray-fw
     host_id: rpi-displays
     kind: microcontroller
-    model: "2.9\" Grayscale e-ink"
+    model: "Feather M4 Express"
     pool: public
+    capabilities: [arduino, wippersnapper, spi]
     status: available
     camera_id: csi-rpi-displays
     qr_identifier: "https://adafru.it/4777"
+    peripheral_ids: [periph-eink-29-gray-fw]
 
-  - id: display-4868
+  - id: mcu-feather-eink-154-tricolor
     host_id: rpi-displays
     kind: microcontroller
-    model: "1.54\" Tri-color e-ink"
+    model: "Feather M4 Express"
     pool: public
+    capabilities: [arduino, wippersnapper, spi]
     status: available
     camera_id: csi-rpi-displays
     qr_identifier: "https://adafru.it/4868"
+    peripheral_ids: [periph-eink-154-tricolor]
 
-  - id: display-5300
+  - id: mcu-feather-esp32s2-tft
     host_id: rpi-displays
     kind: microcontroller
-    model: Feather ESP32-S2 TFT
+    model: "Feather ESP32-S2 TFT"
     pool: public
+    capabilities: [arduino, wippersnapper, spi, i2c, tft-display, wifi]
     status: available
     camera_id: csi-rpi-displays
     qr_identifier: "https://adafru.it/5300"
+    peripheral_ids: [periph-feather-esp32s2-tft-display]
 
-  - id: display-5483
+  - id: mcu-feather-esp32s3-tft
     host_id: rpi-displays
     kind: microcontroller
-    model: Feather ESP32-S3 TFT
+    model: "Feather ESP32-S3 TFT"
     pool: public
+    capabilities: [arduino, wippersnapper, spi, i2c, tft-display, wifi]
     status: available
     camera_id: csi-rpi-displays
     qr_identifier: "https://adafru.it/5483"
+    peripheral_ids: [periph-feather-esp32s3-tft-display]
 
-  - id: display-5691
+  - id: mcu-feather-esp32s3-revtft
     host_id: rpi-displays
     kind: microcontroller
-    model: Feather ESP32-S3 Reverse TFT
+    model: "Feather ESP32-S3 Reverse TFT"
     pool: public
+    capabilities: [arduino, wippersnapper, spi, i2c, tft-display, wifi]
     status: available
     camera_id: csi-rpi-displays
     qr_identifier: "https://adafru.it/5691"
+    peripheral_ids: [periph-feather-esp32s3-revtft-display]

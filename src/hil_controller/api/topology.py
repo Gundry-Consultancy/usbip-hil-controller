@@ -58,6 +58,17 @@ async def get_topology(request: Request, _auth: Auth) -> dict[str, Any]:
             aux_rows = await cur.fetchall()
         async with db.execute("SELECT * FROM connections") as cur:
             conn_rows = await cur.fetchall()
+        async with db.execute("SELECT * FROM peripherals ORDER BY id") as cur:
+            periph_rows = await cur.fetchall()
+        async with db.execute(
+            "SELECT device_id, peripheral_id FROM device_peripherals ORDER BY device_id"
+        ) as cur:
+            dp_rows = await cur.fetchall()
+
+    # Build device→peripheral_ids lookup
+    device_peripheral_ids: dict[str, list[str]] = {}
+    for dp in dp_rows:
+        device_peripheral_ids.setdefault(dp["device_id"], []).append(dp["peripheral_id"])
 
     def _parse(row: Any, list_cols: list[str]) -> dict[str, Any]:
         d = dict(row)
@@ -66,11 +77,18 @@ async def get_topology(request: Request, _auth: Auth) -> dict[str, Any]:
                 d[col] = json.loads(d[col])
         return d
 
+    devices_out = []
+    for d in device_rows:
+        dev = _parse(d, ["capabilities_json", "usb_json"])
+        dev["peripheral_ids"] = device_peripheral_ids.get(dev["id"], [])
+        devices_out.append(dev)
+
     return {
         "hosts": [_parse(h, ["capabilities_json"]) for h in host_rows],
-        "devices": [_parse(d, ["capabilities_json", "usb_json"]) for d in device_rows],
+        "devices": devices_out,
         "auxes": [_parse(a, ["capabilities_json"]) for a in aux_rows],
         "connections": [dict(c) for c in conn_rows],
+        "peripherals": [_parse(p, ["specs_json"]) for p in periph_rows],
     }
 
 

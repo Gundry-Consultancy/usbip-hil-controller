@@ -421,7 +421,8 @@ async def new_device_form(
         return _login_redirect()
     db_path: str = request.app.state.db_path
     hosts = await _hosts(db_path)
-    return _tr(request, "devices_form.html", {"device": None, "hosts": hosts})
+    cameras = await _cameras(db_path)
+    return _tr(request, "devices_form.html", {"device": None, "hosts": hosts, "cameras": cameras})
 
 
 @router.get("/devices/{device_id}/form", response_class=HTMLResponse, include_in_schema=False)
@@ -446,8 +447,9 @@ async def edit_device_form(
     d["usb_vid"] = usb.get("vid", "")
     d["usb_pid"] = usb.get("pid", "")
     hosts = await _hosts(db_path)
+    cameras = await _cameras(db_path)
     roi = dict(roi_row) if roi_row else None
-    return _tr(request, "devices_form.html", {"device": d, "hosts": hosts, "token": hil_token, "roi": roi})
+    return _tr(request, "devices_form.html", {"device": d, "hosts": hosts, "cameras": cameras, "token": hil_token, "roi": roi})
 
 
 @router.get("/devices/{device_id}/snapshot", include_in_schema=False)
@@ -529,9 +531,10 @@ async def create_device(
     db_path: str = request.app.state.db_path
     if not id or not host_id:
         hosts = await _hosts(db_path)
+        cameras = await _cameras(db_path)
         return _tr(
             request, "devices_form.html",
-            {"device": None, "hosts": hosts, "error": "ID and Host are required"},
+            {"device": None, "hosts": hosts, "cameras": cameras, "error": "ID and Host are required"},
         )
     usb_json = json.dumps({"vid": usb_vid, "pid": usb_pid}) if (usb_vid or usb_pid) else None
     async with get_db(db_path) as db:
@@ -548,8 +551,9 @@ async def create_device(
             await db.commit()
         except Exception as exc:
             hosts = await _hosts(db_path)
+            cameras = await _cameras(db_path)
             return _tr(request, "devices_form.html",
-                       {"device": None, "hosts": hosts, "error": str(exc)})
+                       {"device": None, "hosts": hosts, "cameras": cameras, "error": str(exc)})
     return _redirect("/ui/devices")
 
 

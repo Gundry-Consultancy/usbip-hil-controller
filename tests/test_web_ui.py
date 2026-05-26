@@ -194,6 +194,39 @@ async def test_new_device_form_renders(client):
 
 
 @pytest.mark.asyncio
+async def test_device_form_has_camera_dropdown(client):
+    """Camera ID must be a <select> element, not a free-text input."""
+    r = await client.get("/ui/devices/form", cookies=COOKIE)
+    assert r.status_code == 200
+    # Select element with name="camera_id" must be present
+    assert 'name="camera_id"' in r.text
+    assert "<select" in r.text
+    # "— none —" sentinel option must always be rendered
+    assert "none" in r.text.lower()
+
+
+@pytest.mark.asyncio
+async def test_device_form_camera_dropdown_lists_cameras(client):
+    """Camera options appear in the dropdown once a camera is seeded."""
+    cam_r = await client.post(
+        "/ui/cameras",
+        data={
+            "id": "test-cam-01",
+            "model": "Test Webcam",
+            "pool": "public",
+            "status": "available",
+            "stream_url": "http://10.0.0.1:8080/shot.jpg",
+            "stream_type": "snapshot",
+        },
+        cookies=COOKIE,
+    )
+    assert cam_r.headers.get("HX-Redirect") == "/ui/cameras", cam_r.text
+    r = await client.get("/ui/devices/form", cookies=COOKIE)
+    assert r.status_code == 200
+    assert "test-cam-01" in r.text
+
+
+@pytest.mark.asyncio
 async def test_create_device(client):
     await client.post(
         "/ui/hosts",
