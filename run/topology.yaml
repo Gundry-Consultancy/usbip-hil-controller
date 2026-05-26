@@ -226,12 +226,18 @@ devices:
   # Product QR identifier refers to the display peripheral product page.
   # ROI calibration data sourced from tyeth/protomq PR #1 (board_calibration.json).
 
+  # MCU model fields are corrected per hil-detection/references/hardware.md
+  # (USB hub channel map) and protomq script filenames. Entries marked
+  # "confirmed ch<N>" match the hardware.md USB hub channel. Others are
+  # best-guess Adafruit WiFi feathers supported by WipperSnapper.
+
   - id: mcu-feather-lcd-16x2
     host_id: rpi-displays
     kind: microcontroller
-    model: "Feather M4 Express"
+    model: "Metro ESP32-S2"            # confirmed ch2; metro-s2-charlcd-demo
     pool: public
-    capabilities: [arduino, wippersnapper, i2c]
+    capabilities: [arduino, wippersnapper, wifi, native-cdc, i2c, spi]
+    usb: { vid: "239a", pid: "80df" }
     status: available
     camera_id: csi-rpi-displays
     qr_identifier: "https://adafru.it/398"
@@ -240,9 +246,9 @@ devices:
   - id: mcu-feather-eink-29-rbw
     host_id: rpi-displays
     kind: microcontroller
-    model: "Feather M4 Express"
+    model: "Feather ESP32 V2"          # guess (Adafruit WiFi feather, SPI)
     pool: public
-    capabilities: [arduino, wippersnapper, spi]
+    capabilities: [arduino, wippersnapper, wifi, spi]
     status: available
     camera_id: csi-rpi-displays
     qr_identifier: "https://adafru.it/1028"
@@ -251,9 +257,9 @@ devices:
   - id: mcu-feather-oled-fw-128x32
     host_id: rpi-displays
     kind: microcontroller
-    model: "Feather M4 Express"
+    model: "Feather ESP32-S3"          # per feather-s3-ssd1306-128x32-demo
     pool: public
-    capabilities: [arduino, wippersnapper, i2c]
+    capabilities: [arduino, wippersnapper, wifi, native-cdc, i2c]
     status: available
     camera_id: csi-rpi-displays
     qr_identifier: "https://adafru.it/2900"
@@ -262,9 +268,9 @@ devices:
   - id: mcu-feather-alpha-fw-quad
     host_id: rpi-displays
     kind: microcontroller
-    model: "Feather M4 Express"
+    model: "Feather ESP32-S2"          # guess (Adafruit WiFi feather, I2C/HT16K33)
     pool: public
-    capabilities: [arduino, wippersnapper, i2c]
+    capabilities: [arduino, wippersnapper, wifi, native-cdc, i2c]
     status: available
     camera_id: csi-rpi-displays
     qr_identifier: "https://adafru.it/3129"
@@ -273,9 +279,11 @@ devices:
   - id: mcu-pyportal
     host_id: rpi-displays
     kind: microcontroller
-    model: "PyPortal"
+    model: "PyPortal M4 Titano"        # confirmed ch4 (ATSAMD51J20)
     pool: public
-    capabilities: [arduino, wippersnapper, spi, i2c, tft-display, wifi]
+    capabilities: [arduino, wippersnapper, samd51, wifi-airlift, spi, i2c, tft-display]
+    usb: { vid: "239a", pid: "8053" }  # WipperSnapper application PID; CP=8054, UF2=0035
+    usb_serial: "F1DF00AE5346513551202020FF171730"
     status: available
     camera_id: csi-rpi-displays
     qr_identifier: "https://adafru.it/4116"
@@ -284,9 +292,9 @@ devices:
   - id: mcu-feather-tft-13-240
     host_id: rpi-displays
     kind: microcontroller
-    model: "Feather M4 Express"
+    model: "Feather ESP32-S3"          # guess (Adafruit WiFi feather, SPI TFT)
     pool: public
-    capabilities: [arduino, wippersnapper, spi]
+    capabilities: [arduino, wippersnapper, wifi, native-cdc, spi]
     status: available
     camera_id: csi-rpi-displays
     qr_identifier: "https://adafru.it/4313"
@@ -295,9 +303,10 @@ devices:
   - id: mcu-feather-oled-091-stemma
     host_id: rpi-displays
     kind: microcontroller
-    model: "Feather M4 Express"
+    model: "QT Py ESP32-S3 (4MB Flash 2MB PSRAM)"  # confirmed ch0
     pool: public
-    capabilities: [arduino, wippersnapper, i2c]
+    capabilities: [arduino, wippersnapper, wifi, native-cdc, i2c, stemma-qt]
+    usb: { vid: "239a", pid: "8143" }
     status: available
     camera_id: csi-rpi-displays
     qr_identifier: "https://adafru.it/4440"
@@ -306,9 +315,11 @@ devices:
   - id: mcu-feather-oled-fw-128x64
     host_id: rpi-displays
     kind: microcontroller
-    model: "Feather M4 Express"
+    model: "Huzzah32 ESP32 Feather v1" # confirmed ch5 (CP2104 UART bridge)
     pool: public
-    capabilities: [arduino, wippersnapper, i2c]
+    capabilities: [arduino, wippersnapper, wifi, uart-bridge-cp2104, i2c]
+    usb: { vid: "10c4", pid: "ea60" }
+    usb_serial: "022AF71E"
     status: available
     camera_id: csi-rpi-displays
     qr_identifier: "https://adafru.it/4650"
@@ -317,9 +328,9 @@ devices:
   - id: mcu-feather-eink-29-gray-fw
     host_id: rpi-displays
     kind: microcontroller
-    model: "Feather M4 Express"
+    model: "Feather ESP32 V2"          # guess (Adafruit WiFi feather, SPI eInk)
     pool: public
-    capabilities: [arduino, wippersnapper, spi]
+    capabilities: [arduino, wippersnapper, wifi, spi]
     status: available
     camera_id: csi-rpi-displays
     qr_identifier: "https://adafru.it/4777"
@@ -328,9 +339,11 @@ devices:
   - id: mcu-feather-eink-154-tricolor
     host_id: rpi-displays
     kind: microcontroller
-    model: "Feather M4 Express"
+    model: "Raspberry Pi Pico W"       # confirmed ch6 (RP2040 with WiFi)
     pool: public
-    capabilities: [arduino, wippersnapper, spi]
+    capabilities: [arduino, wippersnapper, wifi, native-cdc, rp2040, spi]
+    usb: { vid: "239a", pid: "8120" }  # CircuitPython composite; BOOTSEL=2e8a:0003
+    usb_serial: "E6614104030F7A24"
     status: available
     camera_id: csi-rpi-displays
     qr_identifier: "https://adafru.it/4868"
@@ -339,9 +352,9 @@ devices:
   - id: mcu-feather-esp32s2-tft
     host_id: rpi-displays
     kind: microcontroller
-    model: "Feather ESP32-S2 TFT"
+    model: "Feather ESP32-S2 TFT"      # integrated MCU+TFT
     pool: public
-    capabilities: [arduino, wippersnapper, spi, i2c, tft-display, wifi]
+    capabilities: [arduino, wippersnapper, wifi, native-cdc, spi, i2c, tft-display]
     status: available
     camera_id: csi-rpi-displays
     qr_identifier: "https://adafru.it/5300"
@@ -350,9 +363,10 @@ devices:
   - id: mcu-feather-esp32s3-tft
     host_id: rpi-displays
     kind: microcontroller
-    model: "Feather ESP32-S3 TFT"
+    model: "Feather ESP32-S3 TFT"      # confirmed ch1 (integrated MCU+TFT)
     pool: public
-    capabilities: [arduino, wippersnapper, spi, i2c, tft-display, wifi]
+    capabilities: [arduino, wippersnapper, wifi, native-cdc, spi, i2c, tft-display]
+    usb: { vid: "239a", pid: "811d" }
     status: available
     camera_id: csi-rpi-displays
     qr_identifier: "https://adafru.it/5483"
@@ -361,9 +375,9 @@ devices:
   - id: mcu-feather-esp32s3-revtft
     host_id: rpi-displays
     kind: microcontroller
-    model: "Feather ESP32-S3 Reverse TFT"
+    model: "Feather ESP32-S3 Reverse TFT"  # integrated MCU+TFT; reverse-tft-s3-demo
     pool: public
-    capabilities: [arduino, wippersnapper, spi, i2c, tft-display, wifi]
+    capabilities: [arduino, wippersnapper, wifi, native-cdc, spi, i2c, tft-display]
     status: available
     camera_id: csi-rpi-displays
     qr_identifier: "https://adafru.it/5691"
