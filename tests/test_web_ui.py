@@ -312,9 +312,18 @@ async def test_blank_focus_brightness_stored_as_null(client):
     )
     assert r.status_code == 200
     r = await client.get("/ui/devices/focus-dev-02/form", cookies=COOKIE)
-    # Empty input means the saved value is None — rendered as value=""
-    assert 'name="manual_focus_dioptres"' in r.text
-    assert 'value=""' in r.text  # at least one empty value present
+    # Both fields render with the saved-null state — value="" attached
+    # specifically to these two inputs (not just any empty input on the page).
+    import re
+
+    focus_match = re.search(
+        r'<input[^>]*name="manual_focus_dioptres"[^>]*value="([^"]*)"', r.text
+    )
+    brightness_match = re.search(
+        r'<input[^>]*name="illuminator_brightness"[^>]*value="([^"]*)"', r.text
+    )
+    assert focus_match is not None and focus_match.group(1) == ""
+    assert brightness_match is not None and brightness_match.group(1) == ""
 
 
 @pytest.mark.asyncio

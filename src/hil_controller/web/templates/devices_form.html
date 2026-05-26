@@ -96,6 +96,46 @@
                placeholder="leave blank for off">
         <span class="form-hint">NeoPixel ring brightness (0–255). Blank = no contribution. Across devices sharing a camera, the server applies the max.</span>
       </div>
+      {% if device and device.camera_id %}
+      <div class="form-group" style="grid-column: 1 / -1;">
+        <button type="button" class="btn btn-sm btn-outline"
+                onclick="previewCameraSettings('{{ device.id }}')">
+          Preview on camera
+        </button>
+        <span id="preview-status-{{ device.id }}" class="form-hint" style="margin-left:0.75rem;"></span>
+        <span class="form-hint">Pushes the values above directly to the camera, bypassing the multi-device compromise — for calibration without needing a running job.</span>
+      </div>
+      <script>
+      async function previewCameraSettings(deviceId) {
+        const focus = document.getElementById('f-dev-focus').value;
+        const brightness = document.getElementById('f-dev-brightness').value;
+        const status = document.getElementById('preview-status-' + deviceId);
+        status.textContent = 'pushing…';
+        try {
+          const r = await fetch('/ui/devices/' + deviceId + '/camera/preview', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+              focus: focus === '' ? null : parseFloat(focus),
+              brightness: brightness === '' ? null : parseInt(brightness, 10),
+            }),
+          });
+          const j = await r.json();
+          if (j.ok) {
+            status.textContent = 'pushed: focus=' + (j.focus ?? 'auto') + ', brightness=' + (j.brightness ?? 'off');
+            status.style.color = '#2d7a2d';
+          } else {
+            status.textContent = 'error: ' + (j.error || 'unknown');
+            status.style.color = '#b94a48';
+          }
+        } catch (e) {
+          status.textContent = 'request failed: ' + e;
+          status.style.color = '#b94a48';
+        }
+      }
+      </script>
+      {% endif %}
     </div>
 
     {% if device and device.camera_id %}

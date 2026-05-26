@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Cookie, File, Form, Request, UploadFile, status
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 
 from hil_controller.auth.principal import Principal
@@ -679,6 +679,60 @@ async def delete_device(
         await db.execute("DELETE FROM devices WHERE id = ?", (device_id,))
         await db.commit()
     return HTMLResponse("")
+
+
+@router.post("/devices/{device_id}/camera/preview", include_in_schema=False)
+async def preview_camera_settings(
+    request: Request, device_id: str, hil_token: str = Cookie(default="")
+) -> JSONResponse:
+    """Bypass the compromise and push form values directly to the camera.
+
+    Used by the device edit form's Preview button so the operator can see
+    the effect of a candidate focus/brightness before saving — without
+    needing a running job on the device.
+    """
+    if not (await _check_web_token(request, hil_token)):
+        return JSONResponse({"error": "unauthenticated"}, status_code=401)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    raw_focus = body.get("focus")
+    raw_brightness = body.get("brightness")
+    focus = float(raw_focus) if raw_focus not in (None, "") else None
+    brightness = int(raw_brightness) if raw_brightness not in (None, "") else None
+
+    db_path: str = request.app.state.db_path
+    async with get_db(db_path) as db:
+        async with db.execute(
+            "SELECT camera_id FROM devices WHERE id = ?", (device_id,)
+        ) as cur:
+            row = await cur.fetchone()
+        if row is None or not row["camera_id"]:
+            return JSONResponse({"error": "device has no camera"}, status_code=400)
+        async with db.execute(
+            "SELECT source FROM cameras WHERE id = ?", (row["camera_id"],)
+        ) as cur:
+            cam_row = await cur.fetchone()
+        if cam_row is None:
+            return JSONResponse({"error": "camera not found"}, status_code=404)
+
+    from hil_controller.adapters.camera.orchestrator import (
+        camera_base_url,
+        _push_illuminator,
+        _push_lens,
+    )
+
+    base = camera_base_url(cam_row["source"])
+    if base is None:
+        return JSONResponse(
+            {"error": "camera source is not HTTP"}, status_code=400
+        )
+    await _push_lens(base, focus)
+    await _push_illuminator(base, brightness)
+    return JSONResponse(
+        {"ok": True, "base": base, "focus": focus, "brightness": brightness}
+    )
 
 
 # ---------------------------------------------------------------------------
