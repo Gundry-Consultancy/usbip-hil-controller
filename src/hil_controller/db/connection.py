@@ -105,6 +105,89 @@ async def _migrate(db: aiosqlite.Connection) -> None:
     except Exception:
         pass
 
+    # USB hub-port identity + multi-VID/PID support.
+    for col, defn in [
+        ("hub_host_id", "TEXT"),
+        ("hub_port_path", "TEXT"),
+        ("solenoid_channel", "INTEGER"),
+        ("usb_serial", "TEXT"),
+    ]:
+        try:
+            await db.execute(f"ALTER TABLE devices ADD COLUMN {col} {defn}")
+            await db.commit()
+        except Exception:
+            pass
+
+    try:
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS device_usb_ids (
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                device_id        TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+                vid              TEXT NOT NULL,
+                pid              TEXT NOT NULL,
+                role             TEXT NOT NULL DEFAULT 'unknown',
+                bcd_device       TEXT,
+                description      TEXT,
+                iserial          TEXT,
+                first_seen_at    TEXT NOT NULL,
+                last_seen_at     TEXT NOT NULL,
+                learned_from_job TEXT,
+                source           TEXT NOT NULL DEFAULT 'manual',
+                UNIQUE (device_id, vid, pid, iserial)
+            )
+            """
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_device_usb_ids_lookup ON device_usb_ids(vid, pid)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_device_usb_ids_device ON device_usb_ids(device_id)"
+        )
+        await db.commit()
+    except Exception:
+        pass
+
+    # Backfill device_usb_ids from any pre-existing usb_json values.
+    try:
+        await _backfill_usb_ids(db)
+    except Exception:
+        pass
+
+
+async def _backfill_usb_ids(db: aiosqlite.Connection) -> None:
+    """Copy single-{vid,pid} usb_json rows into device_usb_ids if not already present."""
+    db.row_factory = aiosqlite.Row
+    async with db.execute(
+        "SELECT id, usb_json FROM devices WHERE usb_json IS NOT NULL AND usb_json != ''"
+    ) as cur:
+        rows = await cur.fetchall()
+    now = now_iso()
+    for r in rows:
+        try:
+            data = json.loads(r["usb_json"]) or {}
+        except Exception:
+            continue
+        vid = (data.get("vid") or "").strip().lower()
+        pid = (data.get("pid") or "").strip().lower()
+        if not (vid and pid):
+            continue
+        async with db.execute(
+            "SELECT 1 FROM device_usb_ids WHERE device_id=? AND vid=? AND pid=? "
+            "AND COALESCE(iserial,'')=''",
+            (r["id"], vid, pid),
+        ) as cur:
+            exists = await cur.fetchone()
+        if exists:
+            continue
+        await db.execute(
+            "INSERT INTO device_usb_ids "
+            "(device_id, vid, pid, role, first_seen_at, last_seen_at, source) "
+            "VALUES (?, ?, ?, 'unknown', ?, ?, 'migration')",
+            (r["id"], vid, pid, now, now),
+        )
+    await db.commit()
+
 
 @asynccontextmanager
 async def get_db(db_path: str) -> AsyncGenerator[aiosqlite.Connection, None]:

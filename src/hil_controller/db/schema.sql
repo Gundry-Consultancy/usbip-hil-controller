@@ -70,8 +70,32 @@ CREATE TABLE IF NOT EXISTS devices (
     pool                TEXT NOT NULL DEFAULT 'public',
     status              TEXT NOT NULL DEFAULT 'available',
     serial_port         TEXT,
-    flasher             TEXT
+    flasher             TEXT,
+    hub_host_id         TEXT,                    -- usbip server owning the hub (defaults to host_id)
+    hub_port_path       TEXT,                    -- "1-1.1.3" sysfs/usbip bus-id
+    solenoid_channel    INTEGER,                 -- MCP23017 channel for power control
+    usb_serial          TEXT                     -- iSerial default for matching across re-enums
 );
+
+-- Multi-VID/PID per device (bootloader, runtime, dfu, msc, ...).
+-- Surrogate PK; (device_id, vid, pid, iserial) uniquely identifies one observation.
+CREATE TABLE IF NOT EXISTS device_usb_ids (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    device_id        TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+    vid              TEXT NOT NULL,
+    pid              TEXT NOT NULL,
+    role             TEXT NOT NULL DEFAULT 'unknown',   -- runtime|bootloader|dfu|msc|cdc|unknown
+    bcd_device       TEXT,
+    description      TEXT,
+    iserial          TEXT,
+    first_seen_at    TEXT NOT NULL,
+    last_seen_at     TEXT NOT NULL,
+    learned_from_job TEXT,
+    source           TEXT NOT NULL DEFAULT 'manual',    -- manual|seeder|learn-job|passive|migration
+    UNIQUE (device_id, vid, pid, iserial)
+);
+CREATE INDEX IF NOT EXISTS idx_device_usb_ids_lookup ON device_usb_ids(vid, pid);
+CREATE INDEX IF NOT EXISTS idx_device_usb_ids_device ON device_usb_ids(device_id);
 
 CREATE TABLE IF NOT EXISTS auxes (
     id                  TEXT PRIMARY KEY,
