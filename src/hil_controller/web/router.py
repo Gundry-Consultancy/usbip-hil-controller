@@ -532,6 +532,26 @@ async def device_snapshot_proxy(
     return Response(content=frame_bytes, media_type="image/jpeg")
 
 
+def _parse_optional_float(s: str) -> float | None:
+    s = (s or "").strip()
+    if not s:
+        return None
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
+def _parse_optional_int(s: str) -> int | None:
+    s = (s or "").strip()
+    if not s:
+        return None
+    try:
+        return int(float(s))
+    except ValueError:
+        return None
+
+
 @router.post("/devices", response_class=HTMLResponse, include_in_schema=False)
 async def create_device(
     request: Request,
@@ -549,6 +569,8 @@ async def create_device(
     status: Annotated[str, Form()] = "available",
     camera_id: Annotated[str, Form()] = "",
     qr_identifier: Annotated[str, Form()] = "",
+    manual_focus_dioptres: Annotated[str, Form()] = "",
+    illuminator_brightness: Annotated[str, Form()] = "",
 ) -> HTMLResponse:
     if not (await _check_web_token(request, hil_token)):
         return _login_redirect()
@@ -561,16 +583,20 @@ async def create_device(
             {"device": None, "hosts": hosts, "cameras": cameras, "error": "ID and Host are required"},
         )
     usb_json = json.dumps({"vid": usb_vid, "pid": usb_pid}) if (usb_vid or usb_pid) else None
+    focus_val = _parse_optional_float(manual_focus_dioptres)
+    brightness_val = _parse_optional_int(illuminator_brightness)
     async with get_db(db_path) as db:
         try:
             await db.execute(
                 """INSERT INTO devices
                    (id, host_id, kind, model, capabilities_json, usb_json,
-                    pool, status, serial_port, flasher, camera_id, qr_identifier)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    pool, status, serial_port, flasher, camera_id, qr_identifier,
+                    manual_focus_dioptres, illuminator_brightness)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (id, host_id, kind, model, json.dumps(_parse_caps(capabilities)),
                  usb_json, pool, status, serial_port or None, flasher or None,
-                 camera_id or None, qr_identifier or None),
+                 camera_id or None, qr_identifier or None,
+                 focus_val, brightness_val),
             )
             await db.commit()
         except Exception as exc:
@@ -578,6 +604,15 @@ async def create_device(
             cameras = await _cameras(db_path)
             return _tr(request, "devices_form.html",
                        {"device": None, "hosts": hosts, "cameras": cameras, "error": str(exc)})
+    # Push the new device's settings to its camera (best-effort, no-op when no camera).
+    if camera_id:
+        try:
+            from hil_controller.adapters.camera.orchestrator import recompute_for_camera
+
+            async with get_db(db_path) as db:
+                await recompute_for_camera(db, camera_id)
+        except Exception:
+            pass
     return _redirect("/ui/devices")
 
 
@@ -598,11 +633,15 @@ async def update_device(
     status: Annotated[str, Form()] = "available",
     camera_id: Annotated[str, Form()] = "",
     qr_identifier: Annotated[str, Form()] = "",
+    manual_focus_dioptres: Annotated[str, Form()] = "",
+    illuminator_brightness: Annotated[str, Form()] = "",
 ) -> HTMLResponse:
     if not (await _check_web_token(request, hil_token)):
         return _login_redirect()
     db_path: str = request.app.state.db_path
     usb_json = json.dumps({"vid": usb_vid, "pid": usb_pid}) if (usb_vid or usb_pid) else None
+    focus_val = _parse_optional_float(manual_focus_dioptres)
+    brightness_val = _parse_optional_int(illuminator_brightness)
     async with get_db(db_path) as db:
         async with db.execute("SELECT id FROM devices WHERE id = ?", (device_id,)) as cur:
             if await cur.fetchone() is None:
@@ -610,12 +649,22 @@ async def update_device(
         await db.execute(
             """UPDATE devices SET host_id=?, kind=?, model=?, capabilities_json=?,
                usb_json=?, pool=?, status=?, serial_port=?, flasher=?,
-               camera_id=?, qr_identifier=? WHERE id=?""",
+               camera_id=?, qr_identifier=?,
+               manual_focus_dioptres=?, illuminator_brightness=? WHERE id=?""",
             (host_id, kind, model, json.dumps(_parse_caps(capabilities)),
              usb_json, pool, status, serial_port or None, flasher or None,
-             camera_id or None, qr_identifier or None, device_id),
+             camera_id or None, qr_identifier or None,
+             focus_val, brightness_val, device_id),
         )
         await db.commit()
+    if camera_id:
+        try:
+            from hil_controller.adapters.camera.orchestrator import recompute_for_camera
+
+            async with get_db(db_path) as db:
+                await recompute_for_camera(db, camera_id)
+        except Exception:
+            pass
     return _redirect("/ui/devices")
 
 

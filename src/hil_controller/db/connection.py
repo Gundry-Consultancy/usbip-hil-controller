@@ -45,9 +45,14 @@ async def _migrate(db: aiosqlite.Connection) -> None:
         pass
 
     # camera_id: FK to cameras table; qr_identifier: QR URL for auto-ROI.
+    # manual_focus_dioptres / illuminator_brightness: per-device overrides
+    # the camera orchestrator combines (midpoint / max) across devices
+    # sharing one camera, and pushes to the camera server.
     for col, defn in [
         ("camera_id", "TEXT"),
         ("qr_identifier", "TEXT"),
+        ("manual_focus_dioptres", "REAL"),
+        ("illuminator_brightness", "INTEGER"),
     ]:
         try:
             await db.execute(f"ALTER TABLE devices ADD COLUMN {col} {defn}")

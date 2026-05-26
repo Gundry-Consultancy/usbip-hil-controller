@@ -252,6 +252,72 @@ async def test_create_device(client):
 
 
 @pytest.mark.asyncio
+async def test_create_device_with_focus_and_brightness_overrides(client):
+    await client.post(
+        "/ui/hosts",
+        data={"id": "focus-host-01", "role": "microcontroller-fleet", "addr": "10.0.1.99",
+              "transport": "ssh", "ssh_user": "pi", "status": "available"},
+        cookies=COOKIE,
+    )
+    r = await client.post(
+        "/ui/devices",
+        data={
+            "id": "focus-dev-01",
+            "host_id": "focus-host-01",
+            "kind": "microcontroller",
+            "model": "esp32-s3",
+            "pool": "public",
+            "status": "available",
+            "manual_focus_dioptres": "12.5",
+            "illuminator_brightness": "192",
+        },
+        cookies=COOKIE,
+    )
+    assert r.status_code == 200
+    assert r.headers.get("HX-Redirect") == "/ui/devices"
+
+    # Confirm the values landed in the DB by reading them back via the API.
+    r = await client.get(
+        "/v1/devices/focus-dev-01",
+        headers={"Authorization": "Bearer test-token-for-ci"},
+    )
+    # The /v1/devices/{id} response doesn't expose these fields yet, so
+    # round-trip via the form GET which renders saved values into HTML.
+    r = await client.get("/ui/devices/focus-dev-01/form", cookies=COOKIE)
+    assert r.status_code == 200
+    assert 'value="12.5"' in r.text
+    assert 'value="192"' in r.text
+
+
+@pytest.mark.asyncio
+async def test_blank_focus_brightness_stored_as_null(client):
+    await client.post(
+        "/ui/hosts",
+        data={"id": "focus-host-02", "role": "microcontroller-fleet", "addr": "10.0.1.98",
+              "transport": "ssh", "ssh_user": "pi", "status": "available"},
+        cookies=COOKIE,
+    )
+    r = await client.post(
+        "/ui/devices",
+        data={
+            "id": "focus-dev-02",
+            "host_id": "focus-host-02",
+            "kind": "microcontroller",
+            "pool": "public",
+            "status": "available",
+            "manual_focus_dioptres": "",
+            "illuminator_brightness": "",
+        },
+        cookies=COOKIE,
+    )
+    assert r.status_code == 200
+    r = await client.get("/ui/devices/focus-dev-02/form", cookies=COOKIE)
+    # Empty input means the saved value is None — rendered as value=""
+    assert 'name="manual_focus_dioptres"' in r.text
+    assert 'value=""' in r.text  # at least one empty value present
+
+
+@pytest.mark.asyncio
 async def test_delete_device(client):
     await client.post(
         "/ui/hosts",

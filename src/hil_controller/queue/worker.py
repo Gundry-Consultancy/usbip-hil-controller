@@ -58,6 +58,42 @@ class JobWorker:
                     if "result" in payload:
                         kw["result"] = payload["result"]
                     await update_job_state(db, self.job_id, payload["state"], **kw)
+        if kind == "state":
+            await self._sync_camera_settings(payload["state"])
+
+    async def _sync_camera_settings(self, state: str) -> None:
+        """Push compromise lens/illuminator settings on state transitions.
+
+        On both entry to running-ish states and on terminal states we
+        recompute, so the camera also relaxes back to auto/off when the
+        last active device on it finishes. Best-effort — never propagates
+        an exception out of the worker.
+        """
+        if not self.db_path:
+            return
+        if state not in TERMINAL_STATES and state not in (
+            "preparing",
+            "flashing",
+            "running",
+            "assigned",
+        ):
+            return
+        try:
+            from hil_controller.adapters.camera.orchestrator import recompute_for_device
+            from hil_controller.db.connection import get_db
+
+            # The worker doesn't carry the assigned_device explicitly; pull
+            # it from the job row.
+            async with get_db(self.db_path) as db:
+                async with db.execute(
+                    "SELECT assigned_device FROM jobs WHERE id = ?", (self.job_id,)
+                ) as cur:
+                    row = await cur.fetchone()
+                if not row or not row["assigned_device"]:
+                    return
+                await recompute_for_device(db, row["assigned_device"])
+        except Exception as exc:
+            log.warning("camera settings sync failed for job %s: %s", self.job_id, exc)
 
     async def cancel(self) -> None:
         self._cancelled = True
