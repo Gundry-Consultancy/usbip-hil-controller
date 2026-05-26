@@ -25,7 +25,7 @@ jobs:
           cache: pip
 
       - name: Install
-        run: pip install -e ".[test,lint]"
+        run: pip install -e ".[test,lint,camera]"
 
       - name: Lint
         run: ruff check src/ tests/
