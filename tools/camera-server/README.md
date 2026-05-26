@@ -48,8 +48,10 @@ sudo apt install -y python3-opencv v4l-utils
 ```
 server.py [--port 8080] [--backend auto|picamera2|v4l2]
           [--device /dev/video0] [--camera-num 0]
-          [--width 1280] [--height 720] [--fps 10] [--jpeg-quality 85]
+          [--width 0] [--height 0] [--fps 5] [--jpeg-quality 85]
 ```
+
+`--width 0 --height 0` (the default) means "use the camera's native resolution". For picamera2 backends the raw stream is always pinned to the sensor's full resolution so FoV stays full even when `--width/--height` are dialled down for lower bandwidth — without this, libcamera silently picks a centre-cropped sensor mode to match smaller main-stream sizes (the IMX519 at 1280×720 reads only the middle ~55%×41% of the active area).
 
 ## Architecture
 

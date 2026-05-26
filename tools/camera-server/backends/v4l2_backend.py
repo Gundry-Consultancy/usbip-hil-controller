@@ -66,9 +66,16 @@ class V4L2Backend(Backend):
         if not cap.isOpened():
             raise BackendUnavailable(f"cannot open {self._device} via V4L2")
 
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.cfg.width)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.cfg.height)
+        # width/height = 0 means "use device default" — leave the cap alone
+        # so the driver picks its native mode.
+        if self.cfg.width:
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.cfg.width)
+        if self.cfg.height:
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.cfg.height)
         cap.set(cv2.CAP_PROP_FPS, self.cfg.fps)
+        # Reflect the actual negotiated size back into cfg for /health.
+        self.cfg.width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or self.cfg.width
+        self.cfg.height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or self.cfg.height
         # Single-frame queue so we always read the newest frame; not all
         # drivers honour this but it's cheap to ask.
         cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)

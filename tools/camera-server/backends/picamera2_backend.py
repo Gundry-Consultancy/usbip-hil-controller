@@ -35,14 +35,27 @@ class Picamera2Backend(Backend):
             raise BackendUnavailable(f"picamera2 not importable: {_IMPORT_ERROR}")
         try:
             cam = Picamera2(camera_num=self._camera_num)
+            # Pin the raw stream to the sensor's native resolution so
+            # libcamera selects a full-FoV sensor mode regardless of the
+            # main stream size. Smaller raw modes on the IMX519 are
+            # cropped centre reads — at 1280x720 you only see the middle
+            # ~55% x 41% of the active area.
+            sensor_size = cam.sensor_resolution
+            # Resolve "native" (0) to the sensor's full resolution.
+            main_w = self.cfg.width or sensor_size[0]
+            main_h = self.cfg.height or sensor_size[1]
             # video_configuration keeps the ISP+AF loop running at a stable
             # framerate, which is what continuous AF needs to converge. The
             # still_configuration runs the pipeline only during capture and
             # leaves AF starved.
             config = cam.create_video_configuration(
-                main={"size": (self.cfg.width, self.cfg.height), "format": "RGB888"}
+                main={"size": (main_w, main_h), "format": "RGB888"},
+                raw={"size": sensor_size},
             )
             cam.configure(config)
+            # Remember the resolved size so /health reports the actual stream.
+            self.cfg.width = main_w
+            self.cfg.height = main_h
 
             # Set AF controls before start() so they're active from frame 0.
             # Best-effort: sensors without an AF motor (CM2, CM HQ) lack the

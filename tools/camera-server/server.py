@@ -150,9 +150,12 @@ def main() -> None:
     ap.add_argument(
         "--camera-num", type=int, default=None, help="libcamera camera index (picamera2)"
     )
-    ap.add_argument("--width", type=int, default=1280)
-    ap.add_argument("--height", type=int, default=720)
-    ap.add_argument("--fps", type=int, default=10)
+    # 0 means "use sensor native resolution" — backend-resolved at open
+    # time. Raw stream stays pinned to full sensor so FoV is preserved
+    # even when main is downscaled.
+    ap.add_argument("--width", type=int, default=0)
+    ap.add_argument("--height", type=int, default=0)
+    ap.add_argument("--fps", type=int, default=5)
     ap.add_argument("--jpeg-quality", type=int, default=85)
     args = ap.parse_args()
 
