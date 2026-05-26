@@ -1,0 +1,40 @@
+<div class="form-panel">
+  <h2>{% if peripheral %}Edit Peripheral — {{ peripheral.id }}{% else %}New Peripheral{% endif %}</h2>
+  {% if error %}<div class="alert alert-error">{{ error }}</div>{% endif %}
+  <form hx-post="/ui/peripherals{% if peripheral %}/{{ peripheral.id }}{% endif %}"
+        hx-target="#form-panel"
+        hx-swap="innerHTML">
+    <div class="form-grid">
+      {% if not peripheral %}
+      <div class="form-group">
+        <label for="f-periph-id">ID *</label>
+        <input type="text" id="f-periph-id" name="id" value="" required placeholder="periph-oled-fw-128x32">
+      </div>
+      {% endif %}
+      <div class="form-group">
+        <label for="f-periph-kind">Kind</label>
+        <select id="f-periph-kind" name="kind">
+          {% for k in ['display','sensor','actuator','other'] %}
+          <option value="{{ k }}" {% if peripheral and peripheral.kind == k %}selected{% elif not peripheral and k == 'display' %}selected{% endif %}>{{ k }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="form-group">
+        <label for="f-periph-model">Model</label>
+        <input type="text" id="f-periph-model" name="model" value="{{ peripheral.model if peripheral else '' }}" placeholder="OLED FeatherWing 128x32">
+      </div>
+      <div class="form-group">
+        <label for="f-periph-url">Product URL</label>
+        <input type="url" id="f-periph-url" name="product_url" value="{{ peripheral.product_url or '' if peripheral else '' }}" placeholder="https://adafru.it/2900">
+        <span class="form-hint">Adafruit or manufacturer product page</span>
+      </div>
+      <div class="form-group" style="grid-column:1/-1;">
+        <label for="f-periph-notes">Notes</label>
+        <input type="text" id="f-periph-notes" name="notes" value="{{ peripheral.notes or '' if peripheral else '' }}" placeholder="128x32 monochrome OLED; I2C/SSD1306 driver">
+      </div>
+    </div>
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">{% if peripheral %}Save{% else %}Create{% endif %}</button>
+    </div>
+  </form>
+</div>

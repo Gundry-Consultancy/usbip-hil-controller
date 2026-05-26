@@ -161,6 +161,25 @@ async def _cameras(db_path: str) -> list[dict]:
     return result
 
 
+async def _peripherals_list(db_path: str) -> list[dict]:
+    async with get_db(db_path) as db:
+        async with db.execute("SELECT * FROM peripherals ORDER BY id") as cur:
+            rows = await cur.fetchall()
+        async with db.execute(
+            "SELECT peripheral_id, device_id FROM device_peripherals ORDER BY peripheral_id"
+        ) as cur:
+            dp_rows = await cur.fetchall()
+    periph_devices: dict[str, list[str]] = {}
+    for dp in dp_rows:
+        periph_devices.setdefault(dp["peripheral_id"], []).append(dp["device_id"])
+    result = []
+    for r in rows:
+        p = dict(r)
+        p["device_ids"] = periph_devices.get(p["id"], [])
+        result.append(p)
+    return result
+
+
 async def _camera_by_id(db_path: str, cam_id: str) -> dict | None:
     async with get_db(db_path) as db:
         async with db.execute("SELECT * FROM cameras WHERE id = ?", (cam_id,)) as cur:
@@ -621,8 +640,9 @@ async def hardware_page(
         return _login_redirect()
     db_path: str = request.app.state.db_path
     hardware = await _aux_list(db_path)
+    peripherals = await _peripherals_list(db_path)
     return _tr(request, "hardware.html",
-               {"token": hil_token, "active": "hardware", "hardware": hardware})
+               {"token": hil_token, "active": "hardware", "hardware": hardware, "peripherals": peripherals})
 
 
 @router.get("/hardware/form", response_class=HTMLResponse, include_in_schema=False)
@@ -727,6 +747,103 @@ async def delete_hardware(
     async with get_db(db_path) as db:
         await db.execute("DELETE FROM connections WHERE aux_id = ?", (aux_id,))
         await db.execute("DELETE FROM auxes WHERE id = ?", (aux_id,))
+        await db.commit()
+    return HTMLResponse("")
+
+
+# ---------------------------------------------------------------------------
+# Peripherals CRUD
+# ---------------------------------------------------------------------------
+
+
+@router.get("/peripherals/form", response_class=HTMLResponse, include_in_schema=False)
+async def new_peripheral_form(
+    request: Request, hil_token: str = Cookie(default="")
+) -> HTMLResponse:
+    if not (await _check_web_token(request, hil_token)):
+        return _login_redirect()
+    return _tr(request, "peripherals_form.html", {"peripheral": None})
+
+
+@router.get("/peripherals/{periph_id}/form", response_class=HTMLResponse, include_in_schema=False)
+async def edit_peripheral_form(
+    request: Request, periph_id: str, hil_token: str = Cookie(default="")
+) -> HTMLResponse:
+    if not (await _check_web_token(request, hil_token)):
+        return _login_redirect()
+    db_path: str = request.app.state.db_path
+    async with get_db(db_path) as db:
+        async with db.execute("SELECT * FROM peripherals WHERE id = ?", (periph_id,)) as cur:
+            row = await cur.fetchone()
+    if row is None:
+        return HTMLResponse("Peripheral not found", status_code=404)
+    return _tr(request, "peripherals_form.html", {"peripheral": dict(row)})
+
+
+@router.post("/peripherals", response_class=HTMLResponse, include_in_schema=False)
+async def create_peripheral(
+    request: Request,
+    hil_token: str = Cookie(default=""),
+    id: Annotated[str, Form()] = "",
+    kind: Annotated[str, Form()] = "display",
+    model: Annotated[str, Form()] = "",
+    product_url: Annotated[str, Form()] = "",
+    notes: Annotated[str, Form()] = "",
+) -> HTMLResponse:
+    if not (await _check_web_token(request, hil_token)):
+        return _login_redirect()
+    if not id:
+        return _tr(request, "peripherals_form.html",
+                   {"peripheral": None, "error": "ID is required"})
+    db_path: str = request.app.state.db_path
+    async with get_db(db_path) as db:
+        try:
+            await db.execute(
+                "INSERT INTO peripherals (id, kind, model, product_url, notes) VALUES (?, ?, ?, ?, ?)",
+                (id, kind, model, product_url or None, notes or None),
+            )
+            await db.commit()
+        except Exception as exc:
+            return _tr(request, "peripherals_form.html",
+                       {"peripheral": None, "error": str(exc)})
+    return _redirect("/ui/hardware")
+
+
+@router.post("/peripherals/{periph_id}", response_class=HTMLResponse, include_in_schema=False)
+async def update_peripheral(
+    request: Request,
+    periph_id: str,
+    hil_token: str = Cookie(default=""),
+    kind: Annotated[str, Form()] = "display",
+    model: Annotated[str, Form()] = "",
+    product_url: Annotated[str, Form()] = "",
+    notes: Annotated[str, Form()] = "",
+) -> HTMLResponse:
+    if not (await _check_web_token(request, hil_token)):
+        return _login_redirect()
+    db_path: str = request.app.state.db_path
+    async with get_db(db_path) as db:
+        async with db.execute("SELECT id FROM peripherals WHERE id = ?", (periph_id,)) as cur:
+            if await cur.fetchone() is None:
+                return HTMLResponse("Peripheral not found", status_code=404)
+        await db.execute(
+            "UPDATE peripherals SET kind=?, model=?, product_url=?, notes=? WHERE id=?",
+            (kind, model, product_url or None, notes or None, periph_id),
+        )
+        await db.commit()
+    return _redirect("/ui/hardware")
+
+
+@router.delete("/peripherals/{periph_id}", response_class=HTMLResponse, include_in_schema=False)
+async def delete_peripheral(
+    request: Request, periph_id: str, hil_token: str = Cookie(default="")
+) -> HTMLResponse:
+    if not (await _check_web_token(request, hil_token)):
+        return _login_redirect()
+    db_path: str = request.app.state.db_path
+    async with get_db(db_path) as db:
+        await db.execute("DELETE FROM device_peripherals WHERE peripheral_id = ?", (periph_id,))
+        await db.execute("DELETE FROM peripherals WHERE id = ?", (periph_id,))
         await db.commit()
     return HTMLResponse("")
 
