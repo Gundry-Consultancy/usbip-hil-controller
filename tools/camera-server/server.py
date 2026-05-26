@@ -260,8 +260,12 @@ def main() -> None:
     # 32 pixels). Override per-host or set --no-neopixel to disable.
     ap.add_argument(
         "--neopixel-pin",
-        default="D5",
-        help="board pin name for NeoPixel data line (default D5)",
+        default="D18",
+        help=(
+            "Blinka board pin for NeoPixel data line (default D18). "
+            "rpi_ws281x only supports D12, D13, D18, D19, D21, D10 — "
+            "bridge the ring there if your STEMMA connector lands elsewhere."
+        ),
     )
     ap.add_argument("--neopixel-count", type=int, default=32)
     ap.add_argument(

@@ -1,13 +1,21 @@
 """NeoPixel illuminator via Adafruit Blinka + CircuitPython NeoPixel.
 
-Designed for an Adafruit STEMMA-connected ring (e.g. on the 2.13" eInk
-Bonnet's 3-pin STEMMA connector). Defaults to GPIO5 (D5) — override
-with the ``pin`` argument to match a different wiring.
-
 CircuitPython's ``neopixel`` library on Pi uses ``rpi_ws281x`` under the
-hood, which needs DMA/PWM access. The systemd unit runs as root by
-default on hosts where this driver is enabled; without root the driver
-raises ``IlluminatorUnavailable`` and the server falls back to Null.
+hood, which only supports a fixed set of GPIO pins:
+
+    PWM channel 0:  GPIO12, GPIO18    (most common)
+    PWM channel 1:  GPIO13, GPIO19
+    PCM:            GPIO21
+    SPI:            GPIO10
+
+Pins outside that list fail at ws2811_init time with "Selected GPIO not
+possible". If your STEMMA connector lands somewhere else (e.g. GPIO5 or
+GPIO6 on some Adafruit bonnets), bridge the ring's signal line to one
+of the supported GPIOs.
+
+DMA/PWM access also requires root. The systemd unit ships as User=pi;
+switch to User=root on hosts where the illuminator is needed, or use
+--no-neopixel to skip illuminator init entirely.
 """
 from __future__ import annotations
 
@@ -29,7 +37,7 @@ class NeoPixelIlluminator(Illuminator):
     def __init__(
         self,
         *,
-        pin: str = "D5",
+        pin: str = "D18",
         count: int = 32,
         color: tuple[int, int, int] = (255, 255, 255),
     ) -> None:
@@ -40,20 +48,22 @@ class NeoPixelIlluminator(Illuminator):
         pin_obj = getattr(board, pin, None)
         if pin_obj is None:
             raise IlluminatorUnavailable(f"board has no pin {pin!r}")
+        # Wrap the whole init — NeoPixel() succeeds even when the GPIO
+        # isn't usable (e.g. GPIO5 on Pi); the failure surfaces on the
+        # first show(). Catch both so the server can fall back to Null.
         try:
-            # auto_write=False so we can batch fill+show; brightness controls
-            # the overall PWM amplitude across all pixels.
             self._strip = neopixel.NeoPixel(
                 pin_obj, count, brightness=0.0, auto_write=False
             )
+            self._strip.fill(color)
+            self._strip.show()
         except Exception as exc:
-            raise IlluminatorUnavailable(f"NeoPixel init failed: {exc}") from exc
+            raise IlluminatorUnavailable(
+                f"NeoPixel init failed on pin {pin}: {exc}"
+            ) from exc
         self._count = count
         self._color = color
         self._brightness = 0
-        # Pre-fill colour; brightness is what we'll vary.
-        self._strip.fill(color)
-        self._strip.show()
 
     def set_brightness(self, value: int) -> None:
         v = max(0, min(255, int(value)))

@@ -59,7 +59,7 @@ server.py [--port 8080] [--backend auto|picamera2|v4l2]
 
 The server can drive a NeoPixel ring attached to the host — useful for lighting the DUTs uniformly when the camera is in a dark enclosure. Wiring assumption is an Adafruit STEMMA 3-pin connector (GND / +V / signal) on the eInk Bonnet or similar; the signal line lands on a Pi GPIO that's configurable per host.
 
-- `--neopixel-pin D5` — Blinka board pin name (e.g. `D5`, `D6`, `D10`, `D12`, `D18`, `D21`). Match this to whichever GPIO your STEMMA connector is wired to.
+- `--neopixel-pin D18` — Blinka board pin name. `rpi_ws281x` only supports a fixed set: **D12, D13, D18, D19, D21** (PWM/PCM) and **D10** (SPI). Other pins (including D5/D6 on common Adafruit bonnets) fail at `ws2811_init` with "Selected GPIO not possible" — bridge the ring's signal line to one of the supported GPIOs.
 - `--neopixel-count 32` — pixel count in the ring; 12/16/24/32 are common.
 - `--no-neopixel` — force-disable; useful on hosts without the ring or when running unprivileged.
 
