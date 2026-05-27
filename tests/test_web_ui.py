@@ -708,6 +708,22 @@ def test_ws_builder_protomq_clone_no_recurse_when_disabled():
     assert "--recurse-submodules" not in setup
 
 
+def test_ws_builder_default_build_steps_create_venv_before_platformio():
+    req = _build_ws(build_steps="")
+    setup = req["payload"]["source"]["setup"][2]
+    # venv is created with --system-site-packages and activated before pip/pio.
+    assert "python3 -m venv --system-site-packages .venv" in setup
+    assert setup.index(".venv") < setup.index("pip install platformio")
+    assert "pio run -e adafruit_feather_esp32s3_reversetft --target upload" in setup
+
+
+def test_ws_builder_custom_build_steps_override_default():
+    req = _build_ws(build_steps="echo custom-build")
+    setup = req["payload"]["source"]["setup"][2]
+    assert "echo custom-build" in setup
+    assert "pip install platformio" not in setup
+
+
 def test_parse_github_repo_variants():
     from hil_controller.web.router import _parse_github_repo
     assert _parse_github_repo("https://github.com/tyeth/protomq.git") == ("tyeth", "protomq")

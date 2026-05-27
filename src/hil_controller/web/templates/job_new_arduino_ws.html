@@ -111,8 +111,11 @@
   <div class="form-panel">
     <h2>PlatformIO Build &amp; Flash</h2>
     <p class="form-hint" style="margin-bottom:0.75rem;">
-      Firmware is compiled with PlatformIO then flashed over USB before pytest runs.
-      These steps are injected automatically into the setup — you don't need to add them manually.
+      Firmware is compiled with PlatformIO then flashed over USB before the test runs.
+      The build steps below run on the target host inside a fresh
+      <code>python3 -m venv --system-site-packages .venv</code> (so <code>pip</code> works
+      under PEP 668 / Debian externally-managed). Edit them freely — the env and port
+      fields just seed the default text.
     </p>
     <div class="form-grid">
       <div class="form-group">
@@ -129,6 +132,15 @@
           placeholder="{{ cfg.serial_default_port }}">
         <span class="form-hint">Override via <code>HIL_SERIAL_DEFAULT_PORT</code></span>
       </div>
+      <div class="form-group" style="grid-column:span 2;">
+        <label for="build_steps">Build steps (venv + PlatformIO build + flash)</label>
+        <textarea id="build_steps" name="build_steps" rows="4">{{ form.build_steps if form else default_build_steps }}</textarea>
+        <span class="form-hint">
+          Runs right after the protoMQ clone, before the extra setup below. Leave the
+          default to create+activate the venv then build &amp; flash; clear it to fall back
+          to the auto-generated default.
+        </span>
+      </div>
     </div>
   </div>
 
@@ -136,18 +148,21 @@
     <h2>Test Configuration</h2>
     <div class="form-grid">
       <div class="form-group" style="grid-column:span 2;">
-        <label for="setup">Extra setup (after protoMQ clone + PlatformIO build + flash)</label>
-        <textarea id="setup" name="setup" rows="3"
-          placeholder="pip install -e . &amp;&amp; pip install -e protomq/">{{ form.setup if form else defaults.setup }}</textarea>
+        <label for="setup">Extra setup (after protoMQ clone + Build steps)</label>
+        <textarea id="setup" name="setup" rows="4">{{ form.setup if form else defaults.setup }}</textarea>
         <span class="form-hint">
-          Runs after the automatic steps: <code>git clone … protomq/ &amp;&amp; pip install platformio &amp;&amp; pio run -e &lt;env&gt; &amp;&amp; pio run … --target upload &amp;&amp; …</code>
+          Appended to the deploy chain after the Build steps above (same shell, so the
+          <code>.venv</code> is still active). Default installs the WipperSnapper + protoMQ
+          Python packages and builds protoMQ's web assets (<code>npm ci … build-web</code>).
         </span>
       </div>
       <div class="form-group" style="grid-column:span 2;">
         <label for="test_cmd">Test command</label>
-        <textarea id="test_cmd" name="test_cmd" rows="2"
-          placeholder="python -m pytest tests/ -v --tb=short">{{ form.test_cmd if form else defaults.test_cmd }}</textarea>
-        <span class="form-hint">Run in the WipperSnapper Arduino workspace root.</span>
+        <textarea id="test_cmd" name="test_cmd" rows="2">{{ form.test_cmd if form else defaults.test_cmd }}</textarea>
+        <span class="form-hint">
+          Runs in the workspace root as a <em>separate</em> shell from deploy — prefix with
+          <code>. .venv/bin/activate &amp;&amp;</code> if it needs the Python venv.
+        </span>
       </div>
     </div>
   </div>

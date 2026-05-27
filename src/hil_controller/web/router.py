@@ -1662,6 +1662,7 @@ async def new_arduino_ws_job_page(
             "mqtt_default_host": cfg.mqtt_default_host,
         },
         "defaults": _ARDUINO_WS_DEFAULTS,
+        "default_build_steps": _default_build_steps(cfg.pio_default_env, cfg.serial_default_port),
         "disk": _disk_info(_jobs_dir()),
         "form": None,
         "error": None,
@@ -1743,8 +1744,9 @@ async def submit_arduino_ws_job(
     submodules: Annotated[str, Form()] = "",
     pio_env: Annotated[str, Form()] = "",
     serial_port: Annotated[str, Form()] = "",
+    build_steps: Annotated[str, Form()] = "",
     setup: Annotated[str, Form()] = "",
-    test_cmd: Annotated[str, Form()] = "python -m pytest tests/ -v --tb=short",
+    test_cmd: Annotated[str, Form()] = ". .venv/bin/activate && python -m pytest tests/ -v --tb=short",
     protomq_script: Annotated[str, Form()] = "",
     device_id: Annotated[str, Form()] = "",
     secrets_profile: Annotated[str, Form()] = "bench-protomq",
@@ -1786,7 +1788,7 @@ async def submit_arduino_ws_job(
         "protomq_repo": protomq_repo, "protomq_ref": protomq_ref,
         "pat": pat, "submodules": bool(submodules),
         "pio_env": pio_env, "serial_port": serial_port,
-        "setup": setup, "test_cmd": test_cmd,
+        "build_steps": build_steps, "setup": setup, "test_cmd": test_cmd,
         "protomq_script": protomq_script, "device_id": device_id,
         "secrets_profile": secrets_profile, "mqtt_host": mqtt_host, "mqtt_port": mqtt_port,
         "io_username": io_username, "io_key": io_key,
@@ -1806,6 +1808,7 @@ async def submit_arduino_ws_job(
                 "mqtt_default_host": cfg.mqtt_default_host,
             },
             "defaults": _ARDUINO_WS_DEFAULTS,
+            "default_build_steps": _default_build_steps(pio_env, serial_port),
             "disk": _disk_info(_jobs_dir()),
             "form": form_vals, "error": error,
         }
@@ -1820,6 +1823,7 @@ async def submit_arduino_ws_job(
             submodules=bool(submodules),
             pio_env=pio_env,
             serial_port=serial_port,
+            build_steps=build_steps,
             setup=setup,
             test_cmd=test_cmd,
             protomq_script=protomq_script,
@@ -2085,9 +2089,34 @@ async def purge_eligible(
 _ARDUINO_WS_DEFAULTS = {
     "wippersnapper_ref": "displays-v2",
     "protomq_ref": "displays-v2-testing",
-    "setup": "pip install -e . && pip install -e protomq/",
-    "test_cmd": "python -m pytest tests/ -v --tb=short",
+    "setup": (
+        "pip install -e . && pip install -e protomq/ && "
+        "cd protomq && npm ci && cp .env.example.json .env.json && "
+        "npm run import-protos && npm run build-web && cd .."
+    ),
+    "test_cmd": ". .venv/bin/activate && python -m pytest tests/ -v --tb=short",
 }
+
+
+def _default_build_steps(pio_env: str, serial_port: str) -> str:
+    """Venv-first PlatformIO build+flash steps shown in the editable Build steps box.
+
+    The venv is created with --system-site-packages so pip works under PEP 668
+    (Debian externally-managed) while still seeing apt-installed packages. It is
+    activated here so platformio/pio resolve to the venv for the rest of the
+    deploy chain.
+    """
+    import shlex as _shlex
+
+    env = _shlex.quote(pio_env)
+    port = _shlex.quote(serial_port)
+    return (
+        "python3 -m venv --system-site-packages .venv && "
+        ". .venv/bin/activate && "
+        "pip install platformio && "
+        f"pio run -e {env} && "
+        f"pio run -e {env} --target upload --upload-port {port}"
+    )
 
 
 def _build_arduino_ws_job_request(
@@ -2112,6 +2141,7 @@ def _build_arduino_ws_job_request(
     timeout_total: int,
     timeout_run: int,
     timeout_deploy: int,
+    build_steps: str = "",
 ) -> dict:
     import shlex as _shlex
 
@@ -2121,11 +2151,9 @@ def _build_arduino_ws_job_request(
         + f" --branch {_shlex.quote(protomq_ref)} "
         + f"{_shlex.quote(protomq_repo)} protomq"
     )
-    pio_steps = (
-        f"pip install platformio && "
-        f"pio run -e {_shlex.quote(pio_env)} && "
-        f"pio run -e {_shlex.quote(pio_env)} --target upload --upload-port {_shlex.quote(serial_port)}"
-    )
+    pio_steps = build_steps.replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not pio_steps:
+        pio_steps = _default_build_steps(pio_env, serial_port)
     extra = setup.replace("\r\n", "\n").replace("\r", "\n").strip()
     full_setup = proto_clone + " && " + pio_steps + (" && " + extra if extra else "")
 
