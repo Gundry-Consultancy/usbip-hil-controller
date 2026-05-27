@@ -109,13 +109,63 @@
   </div>
 
   <div class="form-panel">
-    <h2>PlatformIO Build &amp; Flash</h2>
+    <h2>Execution location</h2>
     <p class="form-hint" style="margin-bottom:0.75rem;">
-      Firmware is compiled with PlatformIO then flashed over USB before the test runs.
-      The build steps below run on the target host inside a fresh
+      Each job phase can run on the <strong>controller</strong> or the
+      <strong>DUT host</strong>. rpi-displays is too weak to compile WipperSnapper,
+      so build defaults to the controller; flashing reaches the DUT over usbip
+      (the controller attaches the DUT's USB port) or by shipping the built
+      artifacts to the DUT host.
+    </p>
+    <div class="form-grid">
+      <div class="form-group">
+        <label for="build_host">Build host</label>
+        <select id="build_host" name="build_host">
+          {% set bh = form.build_host if form else 'controller' %}
+          <option value="controller" {% if bh == 'controller' %}selected{% endif %}>controller</option>
+          <option value="dut-host" {% if bh == 'dut-host' %}selected{% endif %}>dut-host</option>
+        </select>
+        <span class="form-hint"><code>pio run</code> (compile) host</span>
+      </div>
+      <div class="form-group">
+        <label for="flash_mode">Flash mode</label>
+        <select id="flash_mode" name="flash_mode">
+          {% set fm = form.flash_mode if form else 'usbip' %}
+          <option value="usbip" {% if fm == 'usbip' %}selected{% endif %}>usbip (attach DUT to controller)</option>
+          <option value="ship-artifacts" {% if fm == 'ship-artifacts' %}selected{% endif %}>ship-artifacts (esptool on DUT host)</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label for="protomq_host">protoMQ host</label>
+        <select id="protomq_host" name="protomq_host">
+          {% set ph = form.protomq_host if form else 'controller' %}
+          <option value="controller" {% if ph == 'controller' %}selected{% endif %}>controller</option>
+          <option value="dut-host" {% if ph == 'dut-host' %}selected{% endif %}>dut-host</option>
+          <option value="off" {% if ph == 'off' %}selected{% endif %}>off</option>
+        </select>
+        <span class="form-hint">On controller, DUT's <code>MQTT_HOST</code> = controller LAN IP</span>
+      </div>
+      <div class="form-group">
+        <label for="test_host">Test (pytest) host</label>
+        <select id="test_host" name="test_host">
+          {% set th = form.test_host if form else 'none' %}
+          <option value="none" {% if th == 'none' %}selected{% endif %}>none</option>
+          <option value="controller" {% if th == 'controller' %}selected{% endif %}>controller</option>
+          <option value="dut-host" {% if th == 'dut-host' %}selected{% endif %}>dut-host</option>
+        </select>
+        <span class="form-hint">Must match the build host (shared workspace)</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="form-panel">
+    <h2>PlatformIO Build</h2>
+    <p class="form-hint" style="margin-bottom:0.75rem;">
+      Firmware is <strong>compiled</strong> by the build steps below inside a fresh
       <code>python3 -m venv --system-site-packages .venv</code> (so <code>pip</code> works
-      under PEP 668 / Debian externally-managed). Edit them freely — the env and port
-      fields just seed the default text.
+      under PEP 668 / Debian externally-managed). Flashing is a separate phase (see
+      Execution location) — these steps stop at <code>pio run</code> and carry no
+      <code>--target upload</code>. Edit them freely — the env field just seeds the default text.
     </p>
     <div class="form-grid">
       <div class="form-group">
@@ -133,12 +183,12 @@
         <span class="form-hint">Override via <code>HIL_SERIAL_DEFAULT_PORT</code></span>
       </div>
       <div class="form-group" style="grid-column:span 2;">
-        <label for="build_steps">Build steps (venv + PlatformIO build + flash)</label>
+        <label for="build_steps">Build steps (venv + PlatformIO compile)</label>
         <textarea id="build_steps" name="build_steps" rows="4">{{ form.build_steps if form else default_build_steps }}</textarea>
         <span class="form-hint">
           Runs right after the protoMQ clone, before the extra setup below. Leave the
-          default to create+activate the venv then build &amp; flash; clear it to fall back
-          to the auto-generated default.
+          default to create+activate the venv then compile; clear it to fall back to the
+          auto-generated default. Upload happens in the separate flash phase.
         </span>
       </div>
     </div>

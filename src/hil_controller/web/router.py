@@ -1744,6 +1744,10 @@ async def submit_arduino_ws_job(
     submodules: Annotated[str, Form()] = "",
     pio_env: Annotated[str, Form()] = "",
     serial_port: Annotated[str, Form()] = "",
+    build_host: Annotated[str, Form()] = "controller",
+    flash_mode: Annotated[str, Form()] = "usbip",
+    test_host: Annotated[str, Form()] = "none",
+    protomq_host: Annotated[str, Form()] = "controller",
     build_steps: Annotated[str, Form()] = "",
     setup: Annotated[str, Form()] = "",
     test_cmd: Annotated[str, Form()] = ". .venv/bin/activate && python -m pytest tests/ -v --tb=short",
@@ -1788,6 +1792,8 @@ async def submit_arduino_ws_job(
         "protomq_repo": protomq_repo, "protomq_ref": protomq_ref,
         "pat": pat, "submodules": bool(submodules),
         "pio_env": pio_env, "serial_port": serial_port,
+        "build_host": build_host, "flash_mode": flash_mode,
+        "test_host": test_host, "protomq_host": protomq_host,
         "build_steps": build_steps, "setup": setup, "test_cmd": test_cmd,
         "protomq_script": protomq_script, "device_id": device_id,
         "secrets_profile": secrets_profile, "mqtt_host": mqtt_host, "mqtt_port": mqtt_port,
@@ -1836,6 +1842,11 @@ async def submit_arduino_ws_job(
             timeout_total=int(timeout_total or 1200),
             timeout_run=int(timeout_run or 300),
             timeout_deploy=int(timeout_deploy or 900),
+            build_host=build_host,
+            flash_mode=flash_mode,
+            test_host=test_host,
+            protomq_host=protomq_host,
+            controller_ip=cfg.controller_ip,
         )
         resp = await _call_jobs_api(request, job_req, hil_token)
         job_id = resp["id"]
@@ -2098,24 +2109,27 @@ _ARDUINO_WS_DEFAULTS = {
 }
 
 
-def _default_build_steps(pio_env: str, serial_port: str) -> str:
-    """Venv-first PlatformIO build+flash steps shown in the editable Build steps box.
+def _default_build_steps(pio_env: str, serial_port: str = "") -> str:
+    """Venv-first PlatformIO **compile-only** steps for the editable Build steps box.
+
+    Compile and flash are now distinct phases (per-phase execution-location): the
+    build runs on the chosen build host (the controller compiles WipperSnapper,
+    which rpi-displays cannot), and the upload happens in a separate flash phase
+    against the DUT — over usbip from the controller, or via shipped artifacts.
+    So these steps deliberately stop at ``pio run`` and carry no ``--target
+    upload`` (``serial_port`` is accepted for signature compat but unused here).
 
     The venv is created with --system-site-packages so pip works under PEP 668
-    (Debian externally-managed) while still seeing apt-installed packages. It is
-    activated here so platformio/pio resolve to the venv for the rest of the
-    deploy chain.
+    (Debian externally-managed) while still seeing apt-installed packages.
     """
     import shlex as _shlex
 
     env = _shlex.quote(pio_env)
-    port = _shlex.quote(serial_port)
     return (
         "python3 -m venv --system-site-packages .venv && "
         ". .venv/bin/activate && "
         "pip install platformio && "
-        f"pio run -e {env} && "
-        f"pio run -e {env} --target upload --upload-port {port}"
+        f"pio run -e {env}"
     )
 
 
@@ -2142,6 +2156,11 @@ def _build_arduino_ws_job_request(
     timeout_run: int,
     timeout_deploy: int,
     build_steps: str = "",
+    build_host: str = "controller",
+    flash_mode: str = "usbip",
+    test_host: str = "none",
+    protomq_host: str = "controller",
+    controller_ip: str = "",
 ) -> dict:
     import shlex as _shlex
 
@@ -2168,15 +2187,30 @@ def _build_arduino_ws_job_request(
         source["pat"] = pat
 
     _mqtt_port = int(mqtt_port) if mqtt_port.strip().isdigit() else 1884
+
+    # When protomq runs on the controller, the DUT firmware must reach the
+    # broker at the controller's LAN IP (not 127.0.0.1) — and the observer
+    # connects there too.
+    effective_mqtt_host = mqtt_host
+    if protomq_host == "controller" and controller_ip:
+        effective_mqtt_host = controller_ip
+
     params: dict = {
         "entry": "bash",
         "args": ["-c", test_cmd.replace("\r\n", "\n").replace("\r", "\n")],
         "protomq_ref": protomq_ref,
         "secrets_format": "dotenv",
+        "exec": {
+            "build_host": build_host,
+            "flash_mode": flash_mode,
+            "test_host": test_host,
+            "protomq_host": protomq_host,
+            "pio_env": pio_env,
+        },
     }
-    if protomq_script and mqtt_host:
+    if protomq_script and effective_mqtt_host:
         params["protomq"] = {
-            "broker_host": mqtt_host,
+            "broker_host": effective_mqtt_host,
             "mqtt_port": _mqtt_port,
             "api_port": 5173,
             "script": protomq_script,
@@ -2188,7 +2222,7 @@ def _build_arduino_ws_job_request(
     else:
         target["device"] = {"kind": "microcontroller", "capabilities": ["wippersnapper"]}
 
-    secrets: dict = {"MQTT_HOST": mqtt_host, "MQTT_PORT": str(_mqtt_port)}
+    secrets: dict = {"MQTT_HOST": effective_mqtt_host, "MQTT_PORT": str(_mqtt_port)}
     if io_username:
         secrets["IO_USERNAME"] = io_username
     if io_key:

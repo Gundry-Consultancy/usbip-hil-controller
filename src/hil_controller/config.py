@@ -43,6 +43,10 @@ class Settings(BaseSettings):
     # Override via HIL_MQTT_DEFAULT_HOST.
     mqtt_default_host: str = "127.0.0.1"
 
+    # LAN IP the DUT uses to reach the controller when protomq/build run on the
+    # controller (per-phase execution-location). Override via HIL_CONTROLLER_IP.
+    controller_ip: str = "192.168.1.169"
+
 
 _settings: Settings | None = None
 

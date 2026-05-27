@@ -714,7 +714,38 @@ def test_ws_builder_default_build_steps_create_venv_before_platformio():
     # venv is created with --system-site-packages and activated before pip/pio.
     assert "python3 -m venv --system-site-packages .venv" in setup
     assert setup.index(".venv") < setup.index("pip install platformio")
-    assert "pio run -e adafruit_feather_esp32s3_reversetft --target upload" in setup
+    assert "pio run -e adafruit_feather_esp32s3_reversetft" in setup
+
+
+def test_ws_builder_default_build_steps_are_compile_only():
+    # Compile and flash are now separate phases — the build chain must NOT
+    # upload (the controller has no DUT serial port; flash runs over usbip).
+    req = _build_ws(build_steps="")
+    setup = req["payload"]["source"]["setup"][2]
+    assert "--target upload" not in setup
+
+
+def test_ws_builder_emits_exec_plan_with_defaults():
+    req = _build_ws()
+    exec_plan = req["params"]["exec"]
+    assert exec_plan["build_host"] == "controller"
+    assert exec_plan["flash_mode"] == "usbip"
+    assert exec_plan["test_host"] == "none"
+    assert exec_plan["protomq_host"] == "controller"
+    assert exec_plan["pio_env"] == "adafruit_feather_esp32s3_reversetft"
+
+
+def test_ws_builder_controller_protomq_points_mqtt_host_at_controller_ip():
+    req = _build_ws(protomq_host="controller", controller_ip="192.168.1.169",
+                    mqtt_host="127.0.0.1", protomq_script="reverse-tft-s3-demo")
+    assert req["secrets"]["MQTT_HOST"] == "192.168.1.169"
+    assert req["params"]["protomq"]["broker_host"] == "192.168.1.169"
+
+
+def test_ws_builder_dut_protomq_keeps_given_mqtt_host():
+    req = _build_ws(protomq_host="dut-host", controller_ip="192.168.1.169",
+                    mqtt_host="127.0.0.1")
+    assert req["secrets"]["MQTT_HOST"] == "127.0.0.1"
 
 
 def test_ws_builder_custom_build_steps_override_default():
