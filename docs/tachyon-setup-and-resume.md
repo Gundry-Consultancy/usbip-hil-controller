@@ -64,6 +64,41 @@ The group change takes effect on the next login. Log out and back in (or `newgrp
 
 ---
 
+## Controller-side per-host SSH keys
+
+`setup-hil-host.sh` (above) installs the *public* key on a remote HIL host. The
+complementary half lives on the **controller**: each `hosts:` entry in
+`run/topology.yaml` names an `ssh_key_path`, and the controller hands that exact
+path to asyncssh as `client_keys` (`hosts/ssh.py`). The service does **not** read
+`~/.ssh` or use an ssh-agent — it only opens the literal file at `ssh_key_path`.
+
+Consequences:
+
+- "I can `ssh` into the host from my shell" does **not** mean the service can. Your
+  personal `~/.ssh/...` key is irrelevant to the controller process.
+- A missing file shows up as a job failing in `flashing`/`preparing` with
+  `[Errno 2] No such file or directory: '/etc/hil/keys/<host>'` — this happens
+  *before* any clone/build/flash runs.
+
+The controller service runs as **`particle`**, so keys must be readable by that
+user (the generic `hil` user in ARCHITECTURE.md §12 maps to `particle` on this
+bench). Provision a key — reusing one you already have authorized on the host:
+
+```bash
+# On the Tachyon controller, as particle:
+sudo install -m 0400 -o particle -g particle \
+  ~/.ssh/<key-that-logs-into-the-host> /etc/hil/keys/<host-id>
+
+# verify as the service user (not yourself):
+sudo -u particle ssh -i /etc/hil/keys/<host-id> <ssh_user>@<addr> 'echo ok'
+```
+
+Keys are read per-connection, so no `systemctl restart` is needed after adding one.
+Several hosts share `/etc/hil/keys/rpi-hil-fleet`; `rpi-displays` uses its own
+`/etc/hil/keys/rpi-displays`.
+
+---
+
 ## Resuming After Reboot / Fresh Session
 
 ### 1. Ensure SSH agent has the key
