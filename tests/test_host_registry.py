@@ -2,7 +2,7 @@
 
 import pytest
 
-from hil_controller.hosts.registry import HostRegistry, _UnmatchedAdapter
+from hil_controller.hosts.registry import HostRegistry, RealHostRegistry, _UnmatchedAdapter
 
 
 def _registry(devices, hosts=None):
@@ -63,3 +63,43 @@ async def test_unmatched_adapter_acquire_raises():
     adapter = _UnmatchedAdapter("no device matched (pool='x')")
     with pytest.raises(RuntimeError, match="no device matched"):
         await adapter.acquire()
+
+
+def test_make_adapter_routes_arduino_ws_to_exec_adapter():
+    from hil_controller.adapters.arduino_ws_exec import ArduinoWsExecAdapter
+    from hil_controller.hosts.local import LocalTransport
+
+    reg = RealHostRegistry(topology_file="", db_path="db")
+    reg._hosts = [
+        {"id": "controller", "kind": "local"},
+        {"id": "rpi-displays", "addr": "192.168.1.234", "ssh_user": "pi"},
+    ]
+    device = {
+        "id": "mcu-revtft",
+        "host_id": "controller",
+        "hub_host_id": "rpi-displays",
+        "hub_port_path": "1-1.1.1.4",
+    }
+    request = {
+        "payload": {"kind": "git-source", "source": {"repo": "r", "ref": "m", "setup": []}},
+        "params": {"exec": {"build_host": "controller", "flash_mode": "usbip", "pio_env": "e"}},
+    }
+    adapter = reg.make_adapter(reg._hosts[0], device, request, "job-1")
+    assert isinstance(adapter, ArduinoWsExecAdapter)
+    # build/run on the controller (local); usbip server is the DUT host
+    assert isinstance(adapter.controller_transport, LocalTransport)
+    assert adapter.server_addr == "192.168.1.234"
+
+
+def test_make_adapter_routes_plain_git_source_to_git_deploy():
+    from hil_controller.adapters.git_deploy import GitDeployAdapter
+
+    reg = RealHostRegistry(topology_file="", db_path="db")
+    reg._hosts = [{"id": "rpi", "addr": "10.0.0.5", "ssh_user": "pi"}]
+    device = {"id": "sbc-1", "host_id": "rpi"}
+    request = {
+        "payload": {"kind": "git-source", "source": {"repo": "r", "ref": "m"}},
+        "params": {},
+    }
+    adapter = reg.make_adapter(reg._hosts[0], device, request, "job-2")
+    assert isinstance(adapter, GitDeployAdapter)

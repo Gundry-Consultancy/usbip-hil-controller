@@ -135,18 +135,6 @@ class RealHostRegistry(HostRegistry):
 
         host, device = result
 
-        if host.get("kind") == "local":
-            from hil_controller.hosts.local import LocalTransport
-
-            transport = LocalTransport()
-        else:
-            transport = SSHTransport(
-                host=host["addr"],
-                user=host.get("ssh_user", "pi"),
-                key_path=Path(host["ssh_key_path"]) if host.get("ssh_key_path") else None,
-                known_hosts=host.get("known_hosts"),
-            )
-
         # Record assignment in the DB
         async with get_db(self.db_path) as db:
             await update_job_state(
@@ -156,6 +144,38 @@ class RealHostRegistry(HostRegistry):
                 assigned_host=host["id"],
                 assigned_device=device["id"],
             )
+
+        return self.make_adapter(host, device, request, job_id)
+
+    def _build_transport(self, host: dict[str, Any]) -> Any:
+        from hil_controller.hosts.ssh import SSHTransport
+
+        if host.get("kind") == "local":
+            from hil_controller.hosts.local import LocalTransport
+
+            return LocalTransport()
+        return SSHTransport(
+            host=host["addr"],
+            user=host.get("ssh_user", "pi"),
+            key_path=Path(host["ssh_key_path"]) if host.get("ssh_key_path") else None,
+            known_hosts=host.get("known_hosts"),
+        )
+
+    def make_adapter(
+        self, host: dict[str, Any], device: dict[str, Any], request: dict[str, Any], job_id: str
+    ) -> Any:
+        """Construct the adapter for a matched (host, device). No DB access.
+
+        Routing:
+          * arduino-ws jobs (``params.exec`` present, git-source) get the
+            phase-aware :class:`ArduinoWsExecAdapter` with two transports —
+            the matched/execution host plus the USB-server (``hub_host_id``).
+          * other git-source jobs get :class:`GitDeployAdapter` (single host).
+          * non-source jobs get :class:`ShellScriptAdapter`.
+        """
+        from hil_controller.adapters.git_deploy import GitDeployAdapter
+
+        transport = self._build_transport(host)
 
         payload = request.get("payload") or {}
         params = request.get("params") or {}
@@ -169,6 +189,30 @@ class RealHostRegistry(HostRegistry):
             return ShellScriptAdapter(
                 transport=transport,
                 script=request.get("script", "true"),
+            )
+
+        exec_plan = params.get("exec")
+        if exec_plan:
+            from hil_controller.adapters.arduino_ws_exec import ArduinoWsExecAdapter
+
+            # The DUT's USB-server host (hub_host_id) may differ from the
+            # execution host. Fall back to the execution host if unset.
+            hub_host_id = device.get("hub_host_id") or host["id"]
+            dut_host = next((h for h in self._hosts if h["id"] == hub_host_id), host)
+            dut_transport = self._build_transport(dut_host)
+
+            return ArduinoWsExecAdapter(
+                controller_transport=transport,
+                dut_transport=dut_transport,
+                job_id=job_id,
+                source=source,
+                params=params,
+                exec_plan=exec_plan,
+                device=device,
+                server_addr=dut_host.get("addr", ""),
+                db_path=getattr(self, "db_path", None),
+                secrets=secrets,
+                secrets_format=secrets_format,
             )
 
         return GitDeployAdapter(
