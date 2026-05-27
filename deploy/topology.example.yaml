@@ -35,6 +35,18 @@ hosts:
     max_concurrent_jobs: 2
     capabilities: [linux, python-snapper]
 
+  # The controller host itself (Tachyon). `kind: local` ⇒ commands run via
+  # LocalTransport — no SSH. Used as the *build host* for arduino-ws jobs
+  # (rpi-displays is too weak to compile WipperSnapper) and, with flash_mode
+  # usbip, as the host that attaches the DUT's USB port and flashes it.
+  # `addr` is the LAN IP the DUT reaches the controller's protomq/usbipd at.
+  - id: tachyon
+    kind: local
+    role: controller
+    addr: 192.168.1.169
+    max_concurrent_jobs: 2
+    capabilities: [linux, platformio, node, usbip-client, vhci]
+
   - id: pi5-protomq
     role: protomq-broker
     addr: 192.168.1.210
@@ -72,5 +84,19 @@ devices:
     model: esp32-s3
     capabilities: [native-cdc, spi, i2c]
     usb: { vid: "239a", pid: "8143" }
+    pool: public
+    status: available
+
+  # Per-phase execution-location wiring (model A / usbip): the *execution* host
+  # is the controller (so builds compile on Tachyon), while the device's USB
+  # physically lives on rpi-displays at busid 1-1.1.1.4. flash_mode=usbip binds
+  # that busid on rpi-displays and attaches it onto Tachyon to flash.
+  - id: mcu-feather-esp32s3-revtft
+    host_id: tachyon            # execution/build host (controller)
+    hub_host_id: rpi-displays   # USB-server host that physically holds the DUT
+    hub_port_path: "1-1.1.1.4"  # usbip busid on rpi-displays
+    kind: microcontroller
+    model: Feather ESP32-S3 Reverse TFT
+    capabilities: [arduino, wippersnapper, tft-display]
     pool: public
     status: available
