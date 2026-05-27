@@ -168,8 +168,11 @@ class RealHostRegistry(HostRegistry):
 
         Routing:
           * arduino-ws jobs (``params.exec`` present, git-source) get the
-            phase-aware :class:`ArduinoWsExecAdapter` with two transports —
-            the matched/execution host plus the USB-server (``hub_host_id``).
+            phase-aware :class:`ArduinoWsExecAdapter`. Its **controller**
+            transport is always ``LocalTransport`` (the host running
+            hil-controller — that is what "build/flash on the controller"
+            means), and its **dut-host** transport is the USB-server host
+            (``hub_host_id``, defaulting to the device's ``host_id``).
           * other git-source jobs get :class:`GitDeployAdapter` (single host).
           * non-source jobs get :class:`ShellScriptAdapter`.
         """
@@ -194,15 +197,18 @@ class RealHostRegistry(HostRegistry):
         exec_plan = params.get("exec")
         if exec_plan:
             from hil_controller.adapters.arduino_ws_exec import ArduinoWsExecAdapter
+            from hil_controller.hosts.local import LocalTransport
 
-            # The DUT's USB-server host (hub_host_id) may differ from the
-            # execution host. Fall back to the execution host if unset.
+            # "controller" == the box running hil-controller == LocalTransport,
+            # regardless of where the DUT's USB physically lives. The DUT's
+            # USB-server host (hub_host_id, default the device's host_id) is the
+            # "dut-host" transport and the usbip attach target.
             hub_host_id = device.get("hub_host_id") or host["id"]
             dut_host = next((h for h in self._hosts if h["id"] == hub_host_id), host)
             dut_transport = self._build_transport(dut_host)
 
             return ArduinoWsExecAdapter(
-                controller_transport=transport,
+                controller_transport=LocalTransport(),
                 dut_transport=dut_transport,
                 job_id=job_id,
                 source=source,

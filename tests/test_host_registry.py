@@ -70,14 +70,13 @@ def test_make_adapter_routes_arduino_ws_to_exec_adapter():
     from hil_controller.hosts.local import LocalTransport
 
     reg = RealHostRegistry(topology_file="", db_path="db")
-    reg._hosts = [
-        {"id": "controller", "kind": "local"},
-        {"id": "rpi-displays", "addr": "192.168.1.234", "ssh_user": "pi"},
-    ]
+    # The device lives on rpi-displays (SSH) — its USB is there. "controller"
+    # must still resolve to LocalTransport (the box running hil-controller),
+    # NOT an SSH transport to the device's host.
+    reg._hosts = [{"id": "rpi-displays", "addr": "192.168.1.234", "ssh_user": "pi"}]
     device = {
         "id": "mcu-revtft",
-        "host_id": "controller",
-        "hub_host_id": "rpi-displays",
+        "host_id": "rpi-displays",
         "hub_port_path": "1-1.1.1.4",
     }
     request = {
@@ -86,7 +85,7 @@ def test_make_adapter_routes_arduino_ws_to_exec_adapter():
     }
     adapter = reg.make_adapter(reg._hosts[0], device, request, "job-1")
     assert isinstance(adapter, ArduinoWsExecAdapter)
-    # build/run on the controller (local); usbip server is the DUT host
+    # controller == local; usbip server (dut-host) is rpi-displays
     assert isinstance(adapter.controller_transport, LocalTransport)
     assert adapter.server_addr == "192.168.1.234"
 

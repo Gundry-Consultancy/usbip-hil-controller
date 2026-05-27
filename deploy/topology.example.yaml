@@ -35,11 +35,11 @@ hosts:
     max_concurrent_jobs: 2
     capabilities: [linux, python-snapper]
 
-  # The controller host itself (Tachyon). `kind: local` ⇒ commands run via
-  # LocalTransport — no SSH. Used as the *build host* for arduino-ws jobs
-  # (rpi-displays is too weak to compile WipperSnapper) and, with flash_mode
-  # usbip, as the host that attaches the DUT's USB port and flashes it.
-  # `addr` is the LAN IP the DUT reaches the controller's protomq/usbipd at.
+  # The controller host itself (Tachyon), informational. arduino-ws jobs use
+  # LocalTransport for the "controller" phases directly (no topology lookup),
+  # so this entry is NOT required for build/flash-on-controller — it documents
+  # the controller's role + capabilities. The DUT reaches the controller's
+  # protomq broker at `config.controller_ip` (HIL_CONTROLLER_IP), not `addr`.
   - id: tachyon
     kind: local
     role: controller
@@ -87,13 +87,15 @@ devices:
     pool: public
     status: available
 
-  # Per-phase execution-location wiring (model A / usbip): the *execution* host
-  # is the controller (so builds compile on Tachyon), while the device's USB
-  # physically lives on rpi-displays at busid 1-1.1.1.4. flash_mode=usbip binds
-  # that busid on rpi-displays and attaches it onto Tachyon to flash.
+  # Per-phase execution-location wiring (model A / usbip). The device's USB
+  # physically lives on rpi-displays (host_id) at busid 1-1.1.1.4. With the
+  # arduino-ws exec plan build_host=controller / flash_mode=usbip, the build
+  # runs on the controller (LocalTransport — "controller" always means the
+  # hil-controller box, no topology host needed for it), and flashing binds
+  # that busid on rpi-displays and attaches it onto the controller. Only
+  # hub_port_path is required here; host_id stays the USB-server host.
   - id: mcu-feather-esp32s3-revtft
-    host_id: tachyon            # execution/build host (controller)
-    hub_host_id: rpi-displays   # USB-server host that physically holds the DUT
+    host_id: rpi-displays       # USB-server host that physically holds the DUT
     hub_port_path: "1-1.1.1.4"  # usbip busid on rpi-displays
     kind: microcontroller
     model: Feather ESP32-S3 Reverse TFT
